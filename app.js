@@ -1,9 +1,14 @@
 const $ = (id) => document.getElementById(id);
 
 const PRESETS = {
-  original: { speed: 1, pitch: 0, reverb: 0, bass: 0, volume: 100 },
-  slowed: { speed: 0.86, pitch: -2, reverb: 46, bass: 2, volume: 100 },
-  nightcore: { speed: 1.2, pitch: 4, reverb: 4, bass: 1, volume: 100 },
+  none:      { speed: 1.00, pitch: 1.00, reverb: 0,  bass: 0, volume: 100 },
+  slowed:    { speed: 0.80, pitch: 0.80, reverb: 40, bass: 0, volume: 100 },
+  nightcore: { speed: 1.20, pitch: 1.20, reverb: 0,  bass: 0, volume: 100 },
+  deep:      { speed: 0.90, pitch: 0.90, reverb: 28, bass: 4, volume: 100 },
+  vaporwave: { speed: 0.85, pitch: 0.85, reverb: 60, bass: 2, volume: 95 },
+  chipmunk:  { speed: 1.25, pitch: 1.32, reverb: 8,  bass: 0, volume: 100 },
+  dreamy:    { speed: 0.95, pitch: 0.95, reverb: 65, bass: 1, volume: 100 },
+  bass:      { speed: 1.00, pitch: 1.00, reverb: 0,  bass: 6, volume: 100 },
 };
 
 const state = {
@@ -23,14 +28,14 @@ const state = {
   dryGain: null,
   wetGain: null,
   masterGain: null,
-  limiter: null,
   isPlaying: false,
   isLooping: false,
   offsetAtStart: 0,
   startedAt: 0,
   pausedPosition: 0,
   speed: 1,
-  pitch: 0,
+  pitch: 1,
+  activePreset: 'none',
   reverb: 0,
   bass: 0,
   volume: 100,
@@ -95,7 +100,7 @@ function updateSliderFill(slider) {
 
 function updateEffectLabels() {
   elements.speedValue.textContent = `${state.speed.toFixed(2)}×`;
-  elements.pitchValue.textContent = `${state.pitch > 0 ? '+' : ''}${state.pitch} st`;
+  elements.pitchValue.textContent = `${state.pitch.toFixed(2)}×`;
   elements.reverbValue.textContent = `${state.reverb}%`;
   elements.bassValue.textContent = `${state.bass > 0 ? '+' : ''}${state.bass} dB`;
   elements.volumeValue.textContent = `${state.volume}%`;
@@ -103,13 +108,21 @@ function updateEffectLabels() {
   elements.quickVolume.value = String(state.volume);
 }
 
-function applySettings(settings, announce = true) {
-  const oldEffectiveRate = state.usingFallback
-    ? state.speed * Math.pow(2, state.pitch / 12)
-    : state.speed;
-  const newEffectiveRate = state.usingFallback
-    ? settings.speed * Math.pow(2, settings.pitch / 12)
-    : settings.speed;
+function pitchRatioToSemitones(ratio) {
+  return 12 * Math.log2(Math.max(0.01, ratio));
+}
+
+function updatePresetSelection() {
+  document.querySelectorAll('.preset-card[data-preset]').forEach((button) => {
+    const active = button.dataset.preset === state.activePreset;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+}
+
+function applySettings(settings, announce = true, presetKey = null) {
+  const oldEffectiveRate = state.usingFallback ? state.speed * state.pitch : state.speed;
+  const newEffectiveRate = state.usingFallback ? settings.speed * settings.pitch : settings.speed;
   if (state.isPlaying && Math.abs(oldEffectiveRate - newEffectiveRate) > 0.0001) {
     const position = getCurrentPosition();
     state.offsetAtStart = position;
@@ -120,20 +133,22 @@ function applySettings(settings, announce = true) {
   state.reverb = settings.reverb;
   state.bass = settings.bass;
   state.volume = settings.volume;
+  state.activePreset = presetKey;
   elements.speedSlider.value = String(state.speed);
   elements.pitchSlider.value = String(state.pitch);
   elements.reverbSlider.value = String(state.reverb);
   elements.bassSlider.value = String(state.bass);
   elements.volumeSlider.value = String(state.volume);
   updateEffectLabels();
+  updatePresetSelection();
 
   if (state.source && state.isPlaying) {
     const now = state.audioContext.currentTime;
-    const effectiveRate = state.usingFallback ? state.speed * Math.pow(2, state.pitch / 12) : state.speed;
+    const effectiveRate = state.usingFallback ? state.speed * state.pitch : state.speed;
     state.source.playbackRate.setTargetAtTime(effectiveRate, now, 0.025);
     if (state.stNode) {
       state.stNode.playbackRate.setTargetAtTime(state.speed, now, 0.025);
-      state.stNode.pitchSemitones.setTargetAtTime(state.pitch, now, 0.025);
+      state.stNode.pitchSemitones.setTargetAtTime(pitchRatioToSemitones(state.pitch), now, 0.025);
     }
   }
   if (state.eq) state.eq.gain.setTargetAtTime(state.bass, state.audioContext.currentTime, 0.025);
@@ -226,7 +241,7 @@ function selectTrack(id) {
   elements.wavePlaceholder.style.display = 'none';
   renderTrackList();
   drawWaveform(track.buffer, 0);
-  applySettings(PRESETS.original, false);
+  applySettings(PRESETS.none, false, 'none');
   setStatus('Трек готов. Выбери пресет или настрой эффекты вручную.');
 }
 
@@ -257,7 +272,7 @@ function resetEditor() {
   const ctx = elements.waveCanvas.getContext('2d');
   ctx.clearRect(0, 0, elements.waveCanvas.width, elements.waveCanvas.height);
   elements.miniProgressFill.style.width = '0%';
-  applySettings(PRESETS.original, false);
+  applySettings(PRESETS.none, false, 'none');
   updatePlayButton(false);
   renderTrackList();
   setStatus('Добавь трек, чтобы начать.');
@@ -290,13 +305,13 @@ function drawWaveform(buffer, progress = 0) {
     const barH = Math.max(3, eased * 82);
     const x = i * gap + (gap - barW) / 2;
     const y = (height - barH) / 2;
-    ctx.fillStyle = (i / bars) <= progress ? '#e6a7fb' : 'rgba(181,132,202,.45)';
+    ctx.fillStyle = (i / bars) <= progress ? '#ffb35f' : 'rgba(255,187,124,.48)';
     roundRect(ctx, x, y, barW, barH, barW / 2);
   }
   if (progress > 0) {
     const x = Math.min(width - 1, width * progress);
-    ctx.fillStyle = '#fff2ff';
-    ctx.shadowColor = '#e1a0ff';
+    ctx.fillStyle = '#fff3e8';
+    ctx.shadowColor = '#ffae50';
     ctx.shadowBlur = 9;
     ctx.beginPath(); ctx.arc(x, height / 2, 3.2, 0, Math.PI * 2); ctx.fill();
     ctx.shadowBlur = 0;
@@ -314,7 +329,7 @@ function getCurrentPosition() {
   if (!track) return 0;
   if (state.isPlaying && state.audioContext) {
     const elapsed = Math.max(0, state.audioContext.currentTime - state.startedAt);
-    const effectiveRate = state.usingFallback ? state.speed * Math.pow(2, state.pitch / 12) : state.speed;
+    const effectiveRate = state.usingFallback ? state.speed * state.pitch : state.speed;
     return Math.min(track.duration, state.offsetAtStart + elapsed * effectiveRate);
   }
   return Math.min(track.duration, state.pausedPosition);
@@ -385,29 +400,25 @@ function createImpulse(context, seconds = 2.8, decay = 2.25) {
 }
 
 function buildEffectGraph(ctx, sourceNode, useSoundTouch = false) {
+  // A low-shelf only lifts/cuts the low band. No broadband compressor follows it,
+  // so boosted bass cannot trigger gain reduction across the entire mix.
   const eq = ctx.createBiquadFilter();
   eq.type = 'lowshelf';
-  eq.frequency.value = 145;
+  eq.frequency.value = 120;
   eq.gain.value = state.bass;
   const dry = ctx.createGain();
   const convolver = ctx.createConvolver();
   convolver.buffer = createImpulse(ctx);
   const wet = ctx.createGain();
   const master = ctx.createGain();
-  const limiter = ctx.createDynamicsCompressor();
-  limiter.threshold.value = -3;
-  limiter.knee.value = 2;
-  limiter.ratio.value = 10;
-  limiter.attack.value = 0.003;
-  limiter.release.value = 0.18;
   dry.gain.value = 1 - state.reverb / 100 * .24;
   wet.gain.value = state.reverb / 100 * .72;
   master.gain.value = state.volume / 100;
   sourceNode.connect(eq);
   eq.connect(dry); dry.connect(master);
   eq.connect(convolver); convolver.connect(wet); wet.connect(master);
-  master.connect(limiter); limiter.connect(ctx.destination);
-  return { eq, dryGain: dry, wetGain: wet, convolver, masterGain: master, limiter };
+  master.connect(ctx.destination);
+  return { eq, dryGain: dry, wetGain: wet, convolver, masterGain: master };
 }
 
 async function startPlayback(position = state.pausedPosition) {
@@ -426,11 +437,11 @@ async function startPlayback(position = state.pausedPosition) {
       stNode = new state.soundTouchNodeClass({ context: ctx });
       source.connect(stNode);
       stNode.playbackRate.value = state.speed;
-      stNode.pitchSemitones.value = state.pitch;
+      stNode.pitchSemitones.value = pitchRatioToSemitones(state.pitch);
       inputNode = stNode;
     } else {
       // Fallback: native playback rate changes both tempo and pitch together.
-      source.playbackRate.value = state.speed * Math.pow(2, state.pitch / 12);
+      source.playbackRate.value = state.speed * state.pitch;
     }
     const graph = buildEffectGraph(ctx, inputNode);
     state.source = source;
@@ -566,14 +577,13 @@ async function renderEffects(inputBuffer, settings) {
   const ctx = new OfflineContext(inputBuffer.numberOfChannels, length, inputBuffer.sampleRate);
   const source = ctx.createBufferSource();
   source.buffer = inputBuffer;
-  const eq = ctx.createBiquadFilter(); eq.type = 'lowshelf'; eq.frequency.value = 145; eq.gain.value = settings.bass;
+  const eq = ctx.createBiquadFilter(); eq.type = 'lowshelf'; eq.frequency.value = 120; eq.gain.value = settings.bass;
   const dry = ctx.createGain(); dry.gain.value = 1 - settings.reverb / 100 * .24;
   const convolver = ctx.createConvolver(); convolver.buffer = createImpulse(ctx);
   const wet = ctx.createGain(); wet.gain.value = settings.reverb / 100 * .72;
   const master = ctx.createGain(); master.gain.value = settings.volume / 100;
-  const limiter = ctx.createDynamicsCompressor(); limiter.threshold.value = -3; limiter.knee.value = 2; limiter.ratio.value = 10; limiter.attack.value = .003; limiter.release.value = .18;
   source.connect(eq); eq.connect(dry); dry.connect(master); eq.connect(convolver); convolver.connect(wet); wet.connect(master);
-  master.connect(limiter); limiter.connect(ctx.destination);
+  master.connect(ctx.destination);
   source.start(0);
   return ctx.startRendering();
 }
@@ -596,24 +606,24 @@ async function exportTrack() {
   setStatus('Готовлю аудио для экспорта. Не закрывай вкладку…');
   try {
     let processed = track.buffer;
-    if ((Math.abs(state.speed - 1) > .001 || state.pitch !== 0) && !state.processOffline && !state.workletFailed) {
+    if ((Math.abs(state.speed - 1) > .001 || Math.abs(state.pitch - 1) > .001) && !state.processOffline && !state.workletFailed) {
       const context = await getAudioContext();
       await loadSoundTouch(context);
     }
-    if (Math.abs(state.speed - 1) > .001 || state.pitch !== 0) {
+    if (Math.abs(state.speed - 1) > .001 || Math.abs(state.pitch - 1) > .001) {
       if (state.processOffline && !state.workletFailed) {
         setStatus('Изменяю темп и высоту тона…');
         processed = await state.processOffline({
           input: track.buffer,
           processorUrl: state.processorUrl,
-          pitchSemitones: state.pitch,
+          pitchSemitones: pitchRatioToSemitones(state.pitch),
           playbackRate: state.speed,
           stretchParameters: { overlapMs: 12 },
         });
       } else {
         setStatus('Применяю запасной режим изменения скорости и тона…');
         const OfflineContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-        const rate = state.speed * Math.pow(2, state.pitch / 12);
+        const rate = state.speed * state.pitch;
         const outLength = Math.ceil(track.buffer.length / rate);
         const ctx = new OfflineContext(track.buffer.numberOfChannels, outLength, track.buffer.sampleRate);
         const source = ctx.createBufferSource(); source.buffer = track.buffer; source.playbackRate.value = rate; source.connect(ctx.destination); source.start(0);
@@ -673,9 +683,14 @@ function wireEvents() {
     const rect = elements.waveWrap.getBoundingClientRect();
     seekTo((event.clientX - rect.left) / rect.width);
   });
-  elements.slowedPreset?.addEventListener('click', () => { applySettings(PRESETS.slowed); showToast('Slowed + Reverb применён ☾'); });
-  elements.nightcorePreset?.addEventListener('click', () => { applySettings(PRESETS.nightcore); showToast('Nightcore применён ✧'); });
-  $('resetButton').addEventListener('click', () => { applySettings(PRESETS.original); showToast('Все эффекты сброшены.'); });
+  document.querySelectorAll('.preset-card[data-preset]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const key = button.dataset.preset;
+      applySettings(PRESETS[key], true, key);
+      showToast(`${button.querySelector('strong').textContent} — пресет применён.`);
+    });
+  });
+  $('resetButton').addEventListener('click', () => { applySettings(PRESETS.none, true, 'none'); showToast('Исходное звучание восстановлено.'); });
   const controls = [
     [elements.speedSlider, 'speed'], [elements.pitchSlider, 'pitch'], [elements.reverbSlider, 'reverb'],
     [elements.bassSlider, 'bass'], [elements.volumeSlider, 'volume'],
@@ -683,12 +698,12 @@ function wireEvents() {
   controls.forEach(([slider, key]) => slider.addEventListener('input', () => {
     const settings = { speed: state.speed, pitch: state.pitch, reverb: state.reverb, bass: state.bass, volume: state.volume };
     settings[key] = Number(slider.value);
-    applySettings(settings, false);
+    applySettings(settings, false, null);
     if (key === 'speed') setStatus('Скорость изменена.');
   }));
   elements.quickVolume.addEventListener('input', () => {
     const settings = { speed: state.speed, pitch: state.pitch, reverb: state.reverb, bass: state.bass, volume: Number(elements.quickVolume.value) };
-    applySettings(settings, false);
+    applySettings(settings, false, null);
   });
   elements.downloadButton.addEventListener('click', exportTrack);
   window.addEventListener('resize', drawProgressAfterResize);
@@ -700,6 +715,7 @@ function wireEvents() {
 
 function initialize() {
   updateEffectLabels();
+  updatePresetSelection();
   renderTrackList();
   wireEvents();
 }

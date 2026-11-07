@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#25002f">
+  <meta name="theme-color" content="#24150e">
   <meta name="description" content="Бесплатная браузерная студия для slowed + reverb, nightcore и других аудио-эффектов.">
   <title>RE:WAVE — Audio Remix Studio</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -32,7 +32,7 @@
           <p>Треки не загружаются на сервер. Всё происходит в твоём браузере.</p>
         </div>
         <a class="side-foot" href="https://github.com/" target="_blank" rel="noreferrer">GitHub Pages <span>↗</span></a>
-        <span class="version">RE:WAVE · 1.0</span>
+        <span class="version">RE:WAVE · 1.1</span>
       </div>
     </aside>
 
@@ -105,21 +105,51 @@
           <section class="presets-section">
             <div class="section-title-row"><div><span class="eyebrow">ONE-CLICK MAGIC</span><h3>Пресеты</h3></div><span class="section-note">Быстрый старт</span></div>
             <div class="preset-grid">
-              <button class="preset-card preset-slow" id="slowedPreset" type="button">
-                <span class="preset-emoji">☾</span>
-                <span class="preset-copy"><strong>Slowed + Reverb</strong><small>Мягко · глубоко · атмосферно</small></span>
+              <button class="preset-card preset-none active" data-preset="none" type="button" aria-pressed="true">
+                <span class="preset-emoji">○</span>
+                <span class="preset-copy"><strong>None</strong><small>Оригинал · без эффектов</small></span>
                 <span class="preset-arrow">↗</span>
               </button>
-              <button class="preset-card preset-night" id="nightcorePreset" type="button">
+              <button class="preset-card preset-slow" data-preset="slowed" type="button" aria-pressed="false">
+                <span class="preset-emoji">☾</span>
+                <span class="preset-copy"><strong>Slowed + Reverb</strong><small>0.8× · мягко · атмосферно</small></span>
+                <span class="preset-arrow">↗</span>
+              </button>
+              <button class="preset-card preset-night" data-preset="nightcore" type="button" aria-pressed="false">
                 <span class="preset-emoji">✧</span>
-                <span class="preset-copy"><strong>Nightcore</strong><small>Быстрее · выше · ярче</small></span>
+                <span class="preset-copy"><strong>Nightcore</strong><small>1.2× · быстрее · выше</small></span>
+                <span class="preset-arrow">↗</span>
+              </button>
+              <button class="preset-card preset-deep" data-preset="deep" type="button" aria-pressed="false">
+                <span class="preset-emoji">◒</span>
+                <span class="preset-copy"><strong>Deep</strong><small>Ниже · басовитее · мягче</small></span>
+                <span class="preset-arrow">↗</span>
+              </button>
+              <button class="preset-card preset-vapor" data-preset="vaporwave" type="button" aria-pressed="false">
+                <span class="preset-emoji">☁</span>
+                <span class="preset-copy"><strong>Vaporwave</strong><small>Медленно · много reverb</small></span>
+                <span class="preset-arrow">↗</span>
+              </button>
+              <button class="preset-card preset-chip" data-preset="chipmunk" type="button" aria-pressed="false">
+                <span class="preset-emoji">⚡</span>
+                <span class="preset-copy"><strong>Chipmunk</strong><small>Очень быстро · высокий тон</small></span>
+                <span class="preset-arrow">↗</span>
+              </button>
+              <button class="preset-card preset-dreamy" data-preset="dreamy" type="button" aria-pressed="false">
+                <span class="preset-emoji">✦</span>
+                <span class="preset-copy"><strong>Dreamy</strong><small>Лёгкое замедление · простор</small></span>
+                <span class="preset-arrow">↗</span>
+              </button>
+              <button class="preset-card preset-bass" data-preset="bass" type="button" aria-pressed="false">
+                <span class="preset-emoji">♫</span>
+                <span class="preset-copy"><strong>Bass Boost</strong><small>Добавляет низкие частоты</small></span>
                 <span class="preset-arrow">↗</span>
               </button>
             </div>
           </section>
 
           <section class="effects-section">
-            <div class="section-title-row effects-title-row"><div><span class="eyebrow">MAKE IT YOURS</span><h3>Настройка эффектов</h3></div><button class="reset-button" id="resetButton" type="button">Сбросить ↺</button></div>
+            <div class="section-title-row effects-title-row"><div><span class="eyebrow">MAKE IT YOURS</span><h3>Настройка эффектов</h3></div><button class="reset-button" id="resetButton" type="button">Вернуть оригинал ↺</button></div>
             <div class="effects-grid">
               <div class="effect-control wide-control">
                 <div class="control-head"><label for="speedSlider">Speed <span class="control-sub">Темп воспроизведения</span></label><output id="speedValue" for="speedSlider">1.00×</output></div>
@@ -127,9 +157,9 @@
                 <div class="range-ends"><span>0.50×</span><span>1.50×</span></div>
               </div>
               <div class="effect-control">
-                <div class="control-head"><label for="pitchSlider">Pitch <span class="control-sub">Высота тона</span></label><output id="pitchValue" for="pitchSlider">0 st</output></div>
-                <input id="pitchSlider" type="range" min="-12" max="12" value="0" step="1">
-                <div class="range-ends"><span>−12 st</span><span>+12 st</span></div>
+                <div class="control-head"><label for="pitchSlider">Pitch <span class="control-sub">Высота тона</span></label><output id="pitchValue" for="pitchSlider">1.00×</output></div>
+                <input id="pitchSlider" type="range" min="0.5" max="1.5" value="1" step="0.01">
+                <div class="range-ends"><span>0.50×</span><span>1.50×</span></div>
               </div>
               <div class="effect-control">
                 <div class="control-head"><label for="reverbSlider">Reverb <span class="control-sub">Эхо / пространство</span></label><output id="reverbValue" for="reverbSlider">0%</output></div>
@@ -137,9 +167,9 @@
                 <div class="range-ends"><span>Dry</span><span>Wet</span></div>
               </div>
               <div class="effect-control">
-                <div class="control-head"><label for="bassSlider">Bass boost <span class="control-sub">Низкие частоты</span></label><output id="bassValue" for="bassSlider">0 dB</output></div>
-                <input id="bassSlider" type="range" min="-12" max="12" value="0" step="1">
-                <div class="range-ends"><span>−12 dB</span><span>+12 dB</span></div>
+                <div class="control-head"><label for="bassSlider">Bass boost <span class="control-sub">Только низкий диапазон · до 120 Hz</span></label><output id="bassValue" for="bassSlider">0 dB</output></div>
+                <input id="bassSlider" type="range" min="0" max="12" value="0" step="1">
+                <div class="range-ends"><span>0 dB</span><span>+12 dB</span></div>
               </div>
               <div class="effect-control">
                 <div class="control-head"><label for="volumeSlider">Volume <span class="control-sub">Громкость</span></label><output id="volumeValue" for="volumeSlider">100%</output></div>
