@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#25002f">
+  <meta name="description" content="Бесплатная браузерная студия для slowed + reverb, nightcore и других аудио-эффектов.">
+  <title>RE:WAVE — Audio Remix Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#top" aria-label="RE:WAVE home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        <span class="brand-name">re<span>:</span>wave</span>
+      </a>
+
+      <div class="side-caption">WORKSPACE</div>
+      <nav class="side-nav" aria-label="Основная навигация">
+        <a class="nav-link active" href="#editor"><span class="nav-icon">◈</span> Редактор</a>
+        <a class="nav-link" href="#library"><span class="nav-icon">▤</span> Моя очередь</a>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="local-card">
+          <span class="local-icon">⌁</span>
+          <strong>Только на устройстве</strong>
+          <p>Треки не загружаются на сервер. Всё происходит в твоём браузере.</p>
+        </div>
+        <a class="side-foot" href="https://github.com/" target="_blank" rel="noreferrer">GitHub Pages <span>↗</span></a>
+        <span class="version">RE:WAVE · 1.0</span>
+      </div>
+    </aside>
+
+    <main class="main-area" id="top">
+      <header class="topbar">
+        <div class="mobile-brand"><span class="brand-mark small" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span> re<span>:</span>wave</div>
+        <div class="topbar-left">
+          <span class="eyebrow">YOUR PERSONAL AUDIO LAB</span>
+          <h1>Remix studio<span class="title-dot">.</span></h1>
+        </div>
+        <div class="topbar-actions">
+          <button class="button button-quiet" id="clearButton" type="button" title="Очистить очередь">Очистить</button>
+          <button class="button button-primary" id="addFilesButton" type="button"><span class="plus">＋</span> Добавить треки</button>
+          <input id="fileInput" type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac,.aac" multiple hidden>
+        </div>
+      </header>
+
+      <section class="workspace" id="editor">
+        <div class="library-panel" id="library">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">YOUR COLLECTION</span>
+              <h2>Очередь <span class="count-badge" id="trackCount">0</span></h2>
+            </div>
+            <button class="icon-button" id="addMoreButton" type="button" aria-label="Добавить аудио" title="Добавить аудио">＋</button>
+          </div>
+
+          <button class="dropzone" id="dropzone" type="button">
+            <span class="upload-icon">↑</span>
+            <strong>Перетащи аудио сюда</strong>
+            <span>или нажми, чтобы выбрать файлы</span>
+            <small>MP3 · WAV · OGG · M4A · FLAC</small>
+          </button>
+
+          <div class="queue-label"><span>ТРЕКИ</span><span id="queueMeta">0 FILES</span></div>
+          <div class="track-list" id="trackList">
+            <div class="empty-queue" id="emptyQueue">
+              <div class="empty-note-icon">♫</div>
+              <strong>Здесь пока тихо</strong>
+              <p>Добавь первый трек, чтобы начать ремикс.</p>
+            </div>
+          </div>
+          <div class="library-tip"><span>✦</span> Совет: можно загрузить сразу несколько треков.</div>
+        </div>
+
+        <div class="editor-panel">
+          <div class="editor-topline">
+            <div class="editing-label"><span class="live-dot"></span> NOW EDITING</div>
+            <div class="format-pill">BROWSER AUDIO ENGINE</div>
+          </div>
+
+          <div class="track-heading">
+            <div class="cover-art" id="coverArt"><span>♫</span><i></i><i></i><i></i></div>
+            <div class="track-heading-copy">
+              <span class="eyebrow">SELECTED TRACK</span>
+              <h2 id="currentTrackName">Выбери свой первый трек</h2>
+              <p id="currentTrackInfo">Твой следующий любимый звук начинается здесь</p>
+            </div>
+          </div>
+
+          <section class="wave-section" aria-label="Волновая форма и перемотка">
+            <div class="wave-topline"><span>WAVEFORM</span><span class="wave-hint">Нажми на волну, чтобы перемотать</span></div>
+            <div class="wave-wrap" id="waveWrap">
+              <canvas id="waveCanvas" height="116" aria-label="Волновая форма аудио"></canvas>
+              <div class="wave-placeholder" id="wavePlaceholder"><span>≈</span><p>Загрузи аудио, чтобы увидеть waveform</p></div>
+            </div>
+            <div class="time-row"><span id="currentTime">0:00</span><span class="time-duration" id="duration">0:00</span></div>
+          </section>
+
+          <section class="presets-section">
+            <div class="section-title-row"><div><span class="eyebrow">ONE-CLICK MAGIC</span><h3>Пресеты</h3></div><span class="section-note">Быстрый старт</span></div>
+            <div class="preset-grid">
+              <button class="preset-card preset-slow" id="slowedPreset" type="button">
+                <span class="preset-emoji">☾</span>
+                <span class="preset-copy"><strong>Slowed + Reverb</strong><small>Мягко · глубоко · атмосферно</small></span>
+                <span class="preset-arrow">↗</span>
+              </button>
+              <button class="preset-card preset-night" id="nightcorePreset" type="button">
+                <span class="preset-emoji">✧</span>
+                <span class="preset-copy"><strong>Nightcore</strong><small>Быстрее · выше · ярче</small></span>
+                <span class="preset-arrow">↗</span>
+              </button>
+            </div>
+          </section>
+
+          <section class="effects-section">
+            <div class="section-title-row effects-title-row"><div><span class="eyebrow">MAKE IT YOURS</span><h3>Настройка эффектов</h3></div><button class="reset-button" id="resetButton" type="button">Сбросить ↺</button></div>
+            <div class="effects-grid">
+              <div class="effect-control wide-control">
+                <div class="control-head"><label for="speedSlider">Speed <span class="control-sub">Темп воспроизведения</span></label><output id="speedValue" for="speedSlider">1.00×</output></div>
+                <input id="speedSlider" type="range" min="0.5" max="1.5" value="1" step="0.01">
+                <div class="range-ends"><span>0.50×</span><span>1.50×</span></div>
+              </div>
+              <div class="effect-control">
+                <div class="control-head"><label for="pitchSlider">Pitch <span class="control-sub">Высота тона</span></label><output id="pitchValue" for="pitchSlider">0 st</output></div>
+                <input id="pitchSlider" type="range" min="-12" max="12" value="0" step="1">
+                <div class="range-ends"><span>−12 st</span><span>+12 st</span></div>
+              </div>
+              <div class="effect-control">
+                <div class="control-head"><label for="reverbSlider">Reverb <span class="control-sub">Эхо / пространство</span></label><output id="reverbValue" for="reverbSlider">0%</output></div>
+                <input id="reverbSlider" type="range" min="0" max="100" value="0" step="1">
+                <div class="range-ends"><span>Dry</span><span>Wet</span></div>
+              </div>
+              <div class="effect-control">
+                <div class="control-head"><label for="bassSlider">Bass boost <span class="control-sub">Низкие частоты</span></label><output id="bassValue" for="bassSlider">0 dB</output></div>
+                <input id="bassSlider" type="range" min="-12" max="12" value="0" step="1">
+                <div class="range-ends"><span>−12 dB</span><span>+12 dB</span></div>
+              </div>
+              <div class="effect-control">
+                <div class="control-head"><label for="volumeSlider">Volume <span class="control-sub">Громкость</span></label><output id="volumeValue" for="volumeSlider">100%</output></div>
+                <input id="volumeSlider" type="range" min="0" max="150" value="100" step="1">
+                <div class="range-ends"><span>0%</span><span>150%</span></div>
+              </div>
+            </div>
+          </section>
+
+          <div class="export-row">
+            <div class="export-copy"><span class="export-icon">↧</span><div><strong>Готово к экспорту?</strong><small>Скачается обработанный WAV-файл</small></div></div>
+            <button class="button button-export" id="downloadButton" type="button" disabled><span>Скачать WAV</span><span class="download-arrow">↓</span></button>
+          </div>
+          <div class="status-line" id="statusLine" role="status" aria-live="polite">Добавь трек, чтобы начать.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="player-bar">
+    <div class="player-track">
+      <div class="mini-cover">♫</div>
+      <div class="player-track-copy"><strong id="playerTrackName">Ничего не играет</strong><span id="playerTrackMeta">Добавь аудио в очередь</span></div>
+    </div>
+    <div class="player-center">
+      <div class="player-controls">
+        <button class="player-button secondary" id="previousButton" type="button" aria-label="Предыдущий трек" title="Предыдущий трек">|‹</button>
+        <button class="play-button" id="playButton" type="button" aria-label="Воспроизвести" title="Воспроизвести"><span id="playIcon">▶</span></button>
+        <button class="player-button secondary" id="nextButton" type="button" aria-label="Следующий трек" title="Следующий трек">›|</button>
+        <button class="player-button loop-button" id="loopButton" type="button" aria-label="Повтор трека" title="Повтор трека">↻</button>
+      </div>
+      <div class="mini-progress"><span id="miniProgressFill"></span></div>
+    </div>
+    <div class="player-right"><span class="volume-symbol">◖))</span><input id="quickVolume" type="range" min="0" max="150" value="100" aria-label="Громкость"></div>
+  </footer>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
