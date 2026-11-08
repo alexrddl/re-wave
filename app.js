@@ -1717,8 +1717,8 @@ function updateToolsControls() {
   }
   elements.trimStartInput.max = String(max);
   elements.trimEndInput.max = String(max);
-  elements.trimStartInput.value = track ? state.trimStart.toFixed(1) : '0';
-  elements.trimEndInput.value = track ? state.trimEnd.toFixed(1) : '0';
+  elements.trimStartInput.value = track ? state.trimStart.toFixed(2) : '0';
+  elements.trimEndInput.value = track ? state.trimEnd.toFixed(2) : '0';
   elements.trimStartInput.disabled = !track;
   elements.trimEndInput.disabled = !track;
   elements.trimDurationValue.textContent = track ? formatTime(state.trimEnd - state.trimStart) : '—';
@@ -1814,8 +1814,10 @@ function wireEvents() {
   });
   elements.trimStartInput.addEventListener('change', () => applyTrimInput('start'));
   elements.trimEndInput.addEventListener('change', () => applyTrimInput('end'));
-  elements.fadeInSlider.addEventListener('input', () => { state.fadeIn = Number(elements.fadeInSlider.value); updateToolsControls(); restartPlaybackAfterToolChange(); });
-  elements.fadeOutSlider.addEventListener('input', () => { state.fadeOut = Number(elements.fadeOutSlider.value); updateToolsControls(); restartPlaybackAfterToolChange(); });
+  elements.fadeInSlider.addEventListener('input', () => { state.fadeIn = Number(elements.fadeInSlider.value); updateToolsControls(); });
+  elements.fadeOutSlider.addEventListener('input', () => { state.fadeOut = Number(elements.fadeOutSlider.value); updateToolsControls(); });
+  elements.fadeInSlider.addEventListener('change', restartPlaybackAfterToolChange);
+  elements.fadeOutSlider.addEventListener('change', restartPlaybackAfterToolChange);
   elements.reverseToggle.addEventListener('change', () => { state.reverse = elements.reverseToggle.checked; restartPlaybackAfterToolChange(); });
   elements.resetToolsButton.addEventListener('click', resetRemixTools);
 
