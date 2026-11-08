@@ -763,19 +763,23 @@ async function exportTrack() {
     }
     setStatus('Применяю Reverb, Bass и Volume…');
     const rendered = await renderEffects(processed, state);
-    setStatus('Создаю WAV-файл…');
-    const wav = encodeWav(rendered);
+    const format = selectedFormat(elements.exportFormat);
+    const bitrate = selectedBitrate(elements.mp3Bitrate);
+    setStatus(format === 'mp3' ? `Кодирую MP3 · ${bitrate} kbps…` : 'Создаю WAV-файл…');
+    const output = format === 'mp3'
+      ? await encodeMp3(rendered, bitrate, (percent) => setStatus(`Кодирую MP3… ${Math.round(percent)}%`))
+      : encodeWav(rendered);
     const cleanBase = track.name.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_');
-    downloadBlob(wav, `${cleanBase}-rewave.wav`);
-    setStatus('Готово! Обработанный WAV скачан.', 'success');
-    showToast('Ремикс готов — WAV-файл скачан ✨');
+    downloadBlob(output, `${cleanBase}-rewave.${format}`);
+    setStatus(`Готово! Обработанный ${format.toUpperCase()} скачан.`, 'success');
+    showToast(`Ремикс готов — ${format.toUpperCase()}-файл скачан ✨`);
   } catch (error) {
     console.error('Export failed:', error);
     setStatus(error.message || 'Не удалось экспортировать файл.', 'error');
     showToast('Ошибка экспорта. Попробуй трек меньшего размера.');
   } finally {
     button.disabled = !getSelectedTrack();
-    buttonLabel.textContent = 'Скачать WAV';
+    buttonLabel.textContent = 'Скачать ' + selectedFormat(elements.exportFormat).toUpperCase();
   }
 }
 
@@ -828,6 +832,8 @@ function setMasterControlsDisabled(disabled) {
   elements.masterFileInput.disabled = disabled;
   elements.masterTargetSlider.disabled = disabled;
   elements.truePeakCeiling.disabled = disabled;
+  elements.masterExportFormat.disabled = disabled;
+  elements.masterMp3Bitrate.disabled = disabled;
   document.querySelectorAll('.target-preset').forEach((button) => { button.disabled = disabled; });
 }
 
@@ -1141,7 +1147,7 @@ async function createLimitedMaster(inputBuffer, inputLufs, targetLufs, ceilingDb
   return output;
 }
 
-async function buildMasteredWav(track, targetLufs, ceilingDb, progressCallback = null) {
+async function buildMasteredAudio(track, targetLufs, ceilingDb, format, bitrate, progressCallback = null) {
   const report = (percent, message) => { if (progressCallback) progressCallback(percent, message); };
   report(2, `Открываю исходный файл: ${track.name}`);
   const audioContext = await getAudioContext();
@@ -1162,12 +1168,19 @@ async function buildMasteredWav(track, targetLufs, ceilingDb, progressCallback =
     peak = await measureApproxTruePeak(mastered);
   }
   const finalLufs = await analyzeIntegratedLufs(mastered);
-  report(92, 'Создаю 24-bit WAV…');
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  const wav = encodeWav(mastered, 24);
+  let output;
+  if (format === 'mp3') {
+    report(92, `Кодирую MP3 · ${bitrate} kbps…`);
+    output = await encodeMp3(mastered, bitrate, (percent) =>
+      report(92 + percent * 0.08, `Кодирую MP3… ${Math.round(percent)}%`));
+  } else {
+    report(92, 'Создаю 24-bit WAV…');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    output = encodeWav(mastered, 24);
+  }
   mastered = null;
   report(100, 'Готово');
-  return { wav, finalLufs, peak };
+  return { output, finalLufs, peak, format };
 }
 
 async function masterAndDownload(trackId, button) {
@@ -1181,9 +1194,12 @@ async function masterAndDownload(trackId, button) {
   button.textContent = 'Master…';
   renderMasterStats();
   try {
-    const result = await buildMasteredWav(track, targetLufs, ceilingDb, (percent, message) => setMasterProgress(percent, message));
+    const format = selectedFormat(elements.masterExportFormat);
+    const bitrate = selectedBitrate(elements.masterMp3Bitrate);
+    const result = await buildMasteredAudio(track, targetLufs, ceilingDb, format, bitrate,
+      (percent, message) => setMasterProgress(percent, message));
     const targetTag = `${Math.abs(targetLufs).toFixed(1).replace('.', '-')}-LUFS`;
-    downloadBlob(result.wav, `${cleanAudioName(track.name)}-mastered-${targetTag}.wav`);
+    downloadBlob(result.output, `${cleanAudioName(track.name)}-mastered-${targetTag}.${format}`);
     track.masteredLufs = result.finalLufs;
     track.masteredPeak = result.peak;
     showToast(`Готово: ${formatLufs(result.finalLufs)} · ${formatDbtp(result.peak)}`);
@@ -1206,24 +1222,26 @@ async function masterAllAndDownload() {
   setMasterControlsDisabled(true);
   const targetLufs = mastering.targetLufs;
   const ceilingDb = mastering.truePeakCeiling;
+  const format = selectedFormat(elements.masterExportFormat);
+  const bitrate = selectedBitrate(elements.masterMp3Bitrate);
   renderMasterTrackList();
   try {
     for (let index = 0; index < readyTracks.length; index++) {
       const track = readyTracks[index];
       const base = (index / readyTracks.length) * 100;
       setMasterProgress(base, `Мастеринг ${index + 1} из ${readyTracks.length}: ${track.name}`);
-      const result = await buildMasteredWav(track, targetLufs, ceilingDb, (percent, message) => {
+      const result = await buildMasteredAudio(track, targetLufs, ceilingDb, format, bitrate, (percent, message) => {
         setMasterProgress(((index + percent / 100) / readyTracks.length) * 100, `${index + 1}/${readyTracks.length} · ${message}`);
       });
       const targetTag = `${Math.abs(targetLufs).toFixed(1).replace('.', '-')}-LUFS`;
-      downloadBlob(result.wav, `${cleanAudioName(track.name)}-mastered-${targetTag}.wav`);
+      downloadBlob(result.output, `${cleanAudioName(track.name)}-mastered-${targetTag}.${format}`);
       track.masteredLufs = result.finalLufs;
       track.masteredPeak = result.peak;
       renderMasterTrackList();
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     setMasterProgress(100, `Готово: подготовлено ${readyTracks.length} файлов`);
-    showToast(`Альбом обработан: ${readyTracks.length} WAV-файлов. Проверь разрешение браузера на множественные загрузки.`);
+    showToast(`Альбом обработан: ${readyTracks.length} ${format.toUpperCase()}-файлов. Проверь разрешение браузера на множественные загрузки.`);
   } catch (error) {
     console.error('Batch mastering failed:', error);
     showToast(error.message || 'Не удалось завершить пакетный мастеринг.');
@@ -1363,6 +1381,8 @@ function wireEvents() {
     applySettings(settings, false, null);
   });
   elements.downloadButton.addEventListener('click', exportTrack);
+  elements.exportFormat.addEventListener('change', updateExportFormatControls);
+  elements.masterExportFormat.addEventListener('change', updateExportFormatControls);
   window.addEventListener('resize', drawProgressAfterResize);
   window.addEventListener('keydown', (event) => {
     const tag = document.activeElement?.tagName;
@@ -1378,6 +1398,7 @@ function initialize() {
   wireMasteringEvents();
   updateMasterTarget(-14);
   renderMasterTrackList();
+  updateExportFormatControls();
   initializeViewFromLocation();
 }
 
