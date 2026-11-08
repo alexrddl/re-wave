@@ -677,10 +677,22 @@ async function startPlayback(position = state.pausedPosition) {
   const track = getSelectedTrack();
   if (!track) { showToast('Сначала добавь аудиофайл.'); return; }
   try {
+    const bounds = getTrimBounds(track);
+    const boundary = state.reverse ? bounds.end : bounds.start;
+    let startPosition = Number.isFinite(position) ? position : boundary;
+    if (state.reverse) {
+      if (startPosition <= bounds.start + .01) startPosition = bounds.end;
+      startPosition = Math.max(bounds.start, Math.min(bounds.end, startPosition));
+    } else {
+      if (startPosition >= bounds.end - .01) startPosition = bounds.start;
+      startPosition = Math.max(bounds.start, Math.min(bounds.end, startPosition));
+    }
+    const sourceOffset = state.reverse ? Math.max(0, track.duration - startPosition) : startPosition;
+    const sourceDuration = state.reverse ? Math.max(.05, startPosition - bounds.start) : Math.max(.05, bounds.end - startPosition);
     const ctx = await getAudioContext();
     const hasWorklet = await loadSoundTouch(ctx);
     const source = ctx.createBufferSource();
-    source.buffer = track.buffer;
+    source.buffer = getPlaybackBuffer(track);
     source.playbackRate.value = state.speed;
     state.usingFallback = !hasWorklet;
     let inputNode = source;
@@ -692,39 +704,46 @@ async function startPlayback(position = state.pausedPosition) {
       stNode.pitchSemitones.value = pitchRatioToSemitones(state.pitch);
       inputNode = stNode;
     } else {
-      // Fallback: native playback rate changes both tempo and pitch together.
       source.playbackRate.value = state.speed * state.pitch;
     }
-    const graph = buildEffectGraph(ctx, inputNode);
+    const graph = buildEffectGraph(ctx, inputNode, track.buffer.numberOfChannels, state);
     state.source = source;
     state.stNode = stNode;
-    Object.assign(state, graph);
-    state.offsetAtStart = Math.max(0, Math.min(position, track.duration));
+    state.segmentStart = bounds.start;
+    state.segmentEnd = bounds.end;
+    state.playbackReverse = state.reverse;
+    state.offsetAtStart = startPosition;
     state.startedAt = ctx.currentTime;
-    state.pausedPosition = state.offsetAtStart;
+    state.pausedPosition = startPosition;
     state.isPlaying = true;
+    Object.assign(state, graph);
+    const effectiveRate = state.usingFallback ? state.speed * state.pitch : state.speed;
+    schedulePlaybackFades(graph.fadeGain, ctx, sourceDuration, effectiveRate,
+      state.reverse ? startPosition >= bounds.end - .01 : startPosition <= bounds.start + .01);
     source.onended = () => {
       if (state.source === source && state.isPlaying && !state.isLooping) {
+        state.pausedPosition = state.playbackReverse ? state.segmentEnd : state.segmentStart;
         state.isPlaying = false;
-        state.pausedPosition = 0;
         state.source = null;
         state.stNode = null;
+        state.effectModulators?.forEach((oscillator) => { try { oscillator.stop(); } catch (_) {} });
+        state.effectGraphNodes?.forEach((node) => { try { node.disconnect(); } catch (_) {} });
+        state.effectModulators = [];
+        state.effectGraphNodes = [];
         cancelAnimationFrame(state.raf);
         updatePlayButton(false);
-        elements.currentTime.textContent = '0:00';
-        elements.miniProgressFill.style.width = '0%';
-        drawWaveform(track.buffer, 0);
+        elements.currentTime.textContent = formatTime(state.pausedPosition);
+        elements.miniProgressFill.style.width = `${(state.pausedPosition / track.duration) * 100}%`;
+        drawWaveform(track.buffer, state.pausedPosition / track.duration);
       }
     };
-    source.start(0, state.offsetAtStart);
+    source.start(0, sourceOffset, sourceDuration);
     updatePlayButton(true);
     cancelAnimationFrame(state.raf);
     state.raf = requestAnimationFrame(updateProgress);
-    if (!hasWorklet) {
-      setStatus('Запасной режим: Speed и Pitch связаны. Для независимой обработки проверь подключение к CDN.', 'error');
-    } else {
-      setStatus('Воспроизведение с независимыми Speed и Pitch.', 'success');
-    }
+    setStatus(!hasWorklet
+      ? 'Запасной режим: Speed и Pitch связаны. Остальные эффекты доступны.'
+      : 'Воспроизведение с эффектами и независимыми Speed / Pitch.', hasWorklet ? 'success' : 'error');
   } catch (error) {
     console.error(error);
     setStatus(error.message || 'Не удалось запустить воспроизведение.', 'error');
@@ -745,8 +764,17 @@ function stopPlayback(keepPosition = true) {
   if (state.stNode) {
     try { state.stNode.disconnect(); } catch (_) { /* already disconnected */ }
   }
+  state.effectModulators?.forEach((oscillator) => { try { oscillator.stop(); } catch (_) {} });
+  state.effectGraphNodes?.forEach((node) => { try { node.disconnect(); } catch (_) {} });
   state.source = null;
   state.stNode = null;
+  state.effectModulators = [];
+  state.effectGraphNodes = [];
+  state.eq = null; state.eqBands = null; state.compressor = null;
+  state.saturation = null; state.tapeTone = null; state.widthLeft = null; state.widthRight = null;
+  state.dryGain = null; state.wetGain = null; state.convolver = null;
+  state.delayWet = null; state.chorusWet = null; state.chorusDepth = null;
+  state.fadeGain = null; state.masterGain = null;
   updatePlayButton(false);
 }
 
@@ -756,38 +784,47 @@ function updatePlayButton(playing) {
   elements.playButton.title = playing ? 'Пауза' : 'Воспроизвести';
 }
 
+
 async function togglePlayback() {
-  if (!getSelectedTrack()) { showToast('Сначала добавь трек в очередь.'); return; }
+  const track = getSelectedTrack();
+  if (!track) { showToast('Сначала добавь трек в очередь.'); return; }
   if (state.isPlaying) {
     stopPlayback(true);
     setStatus('Пауза. Нажми Play, чтобы продолжить.');
   } else {
-    const track = getSelectedTrack();
-    const position = state.pausedPosition >= track.duration ? 0 : state.pausedPosition;
+    const bounds = getTrimBounds(track);
+    let position = state.pausedPosition;
+    if (state.reverse ? position <= bounds.start + .01 : position >= bounds.end - .01) position = state.reverse ? bounds.end : bounds.start;
     await startPlayback(position);
   }
 }
 
+
 function seekTo(ratio) {
   const track = getSelectedTrack();
   if (!track) return;
-  const position = Math.max(0, Math.min(1, ratio)) * track.duration;
+  const bounds = getTrimBounds(track);
+  const raw = Math.max(0, Math.min(1, ratio)) * track.duration;
+  const position = Math.max(bounds.start, Math.min(bounds.end, raw));
   const wasPlaying = state.isPlaying;
   if (wasPlaying) stopPlayback(false);
   state.pausedPosition = position;
   elements.currentTime.textContent = formatTime(position);
-  elements.miniProgressFill.style.width = `${ratio * 100}%`;
-  drawWaveform(track.buffer, ratio);
+  elements.miniProgressFill.style.width = `${(position / track.duration) * 100}%`;
+  drawWaveform(track.buffer, position / track.duration);
   if (wasPlaying) startPlayback(position);
 }
+
 
 function changeTrack(direction) {
   if (!state.tracks.length) return;
   const index = state.tracks.findIndex((track) => track.id === state.selectedId);
   const next = (index + direction + state.tracks.length) % state.tracks.length;
   selectTrack(state.tracks[next].id);
-  startPlayback(0);
+  const nextTrack = getSelectedTrack();
+  startPlayback(state.reverse ? nextTrack.duration : 0);
 }
+
 
 function drawProgressAfterResize() {
   const track = getSelectedTrack();
