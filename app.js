@@ -438,26 +438,226 @@ function createImpulse(context, seconds = 2.8, decay = 2.25) {
   return impulse;
 }
 
-function buildEffectGraph(ctx, sourceNode, useSoundTouch = false) {
-  // A low-shelf only lifts/cuts the low band. No broadband compressor follows it,
-  // so boosted bass cannot trigger gain reduction across the entire mix.
+function makeSaturationCurve(amount = 0, tape = 0) {
+  const size = 2048;
+  const curve = new Float32Array(size);
+  const blend = Math.max(0, Math.min(1, amount / 100 * .72 + tape / 100 * .18));
+  const drive = 1 + amount / 18 + tape / 12;
+  const normalization = Math.tanh(drive);
+  for (let index = 0; index < size; index++) {
+    const x = index * 2 / (size - 1) - 1;
+    const shaped = Math.tanh(x * drive) / normalization;
+    curve[index] = x * (1 - blend) + shaped * blend;
+  }
+  return curve;
+}
+
+function applyAdvancedGraphSettings(nodes, settings, ctx) {
+  if (!nodes) return;
+  const bands = [settings.eqLow, settings.eqLowMid, settings.eqMid, settings.eqHighMid, settings.eqHigh];
+  nodes.eqBands?.forEach((filter, index) => { filter.gain.setTargetAtTime(bands[index], ctx.currentTime, .025); });
+  const compression = settings.compressor / 100;
+  if (nodes.compressor) {
+    nodes.compressor.threshold.setTargetAtTime(settings.compressor ? -6 - compression * 24 : 0, ctx.currentTime, .025);
+    nodes.compressor.ratio.setTargetAtTime(settings.compressor ? 1 + compression * 5.5 : 1, ctx.currentTime, .025);
+    nodes.compressor.knee.setTargetAtTime(12, ctx.currentTime, .025);
+  }
+  if (nodes.saturation) nodes.saturation.curve = makeSaturationCurve(settings.saturation, settings.tape);
+  if (nodes.tapeTone) nodes.tapeTone.gain.setTargetAtTime(-settings.tape * .028, ctx.currentTime, .025);
+  if (nodes.widthLeft) nodes.widthLeft.gain.setTargetAtTime(settings.stereoWidth / 100, ctx.currentTime, .025);
+  if (nodes.widthRight) nodes.widthRight.gain.setTargetAtTime(-settings.stereoWidth / 100, ctx.currentTime, .025);
+  if (nodes.delayWet) nodes.delayWet.gain.setTargetAtTime(settings.delay / 100 * .34, ctx.currentTime, .025);
+  if (nodes.chorusWet) nodes.chorusWet.gain.setTargetAtTime(settings.chorus / 100 * .28, ctx.currentTime, .025);
+  if (nodes.chorusDepth) nodes.chorusDepth.gain.setTargetAtTime(settings.chorus / 100 * .0035, ctx.currentTime, .025);
+}
+
+function buildEffectGraph(ctx, sourceNode, channelCount = 2, settings = state) {
   const eq = ctx.createBiquadFilter();
   eq.type = 'lowshelf';
   eq.frequency.value = 120;
-  eq.gain.value = state.bass;
+  eq.gain.value = settings.bass;
+
+  const eqSpecs = [
+    { type: 'lowshelf', frequency: 140, q: 0.7 },
+    { type: 'peaking', frequency: 280, q: 0.85 },
+    { type: 'peaking', frequency: 1100, q: 0.85 },
+    { type: 'peaking', frequency: 4200, q: 0.85 },
+    { type: 'highshelf', frequency: 10500, q: 0.7 },
+  ];
+  const eqBands = eqSpecs.map((spec, index) => {
+    const filter = ctx.createBiquadFilter();
+    filter.type = spec.type;
+    filter.frequency.value = spec.frequency;
+    filter.Q.value = spec.q;
+    filter.gain.value = [settings.eqLow, settings.eqLowMid, settings.eqMid, settings.eqHighMid, settings.eqHigh][index];
+    return filter;
+  });
+
+  let chain = eq;
+  sourceNode.connect(eq);
+  eqBands.forEach((filter) => { chain.connect(filter); chain = filter; });
+
+  const compressor = ctx.createDynamicsCompressor();
+  const saturation = ctx.createWaveShaper();
+  saturation.oversample = '2x';
+  saturation.curve = makeSaturationCurve(settings.saturation, settings.tape);
+  const tapeTone = ctx.createBiquadFilter();
+  tapeTone.type = 'highshelf';
+  tapeTone.frequency.value = 10500;
+  tapeTone.gain.value = -settings.tape * .028;
+  chain.connect(compressor);
+  compressor.connect(saturation);
+  saturation.connect(tapeTone);
+  chain = tapeTone;
+
+  let widthLeft = null;
+  let widthRight = null;
+  let widthMerger = null;
+  if (channelCount >= 2) {
+    const splitter = ctx.createChannelSplitter(2);
+    const merger = ctx.createChannelMerger(2);
+    const leftMid = ctx.createGain(); leftMid.gain.value = .5;
+    const rightMid = ctx.createGain(); rightMid.gain.value = .5;
+    const leftSide = ctx.createGain(); leftSide.gain.value = .5;
+    const rightSide = ctx.createGain(); rightSide.gain.value = -.5;
+    const midBus = ctx.createGain();
+    const sideBus = ctx.createGain();
+    widthLeft = ctx.createGain(); widthLeft.gain.value = settings.stereoWidth / 100;
+    widthRight = ctx.createGain(); widthRight.gain.value = -settings.stereoWidth / 100;
+    chain.connect(splitter);
+    splitter.connect(leftMid, 0); splitter.connect(rightMid, 1);
+    splitter.connect(leftSide, 0); splitter.connect(rightSide, 1);
+    leftMid.connect(midBus); rightMid.connect(midBus);
+    leftSide.connect(sideBus); rightSide.connect(sideBus);
+    midBus.connect(merger, 0, 0); midBus.connect(merger, 0, 1);
+    sideBus.connect(widthLeft); sideBus.connect(widthRight);
+    widthLeft.connect(merger, 0, 0); widthRight.connect(merger, 0, 1);
+    chain = merger;
+    widthMerger = merger;
+  }
+
   const dry = ctx.createGain();
+  dry.gain.value = 1 - settings.reverb / 100 * .24;
   const convolver = ctx.createConvolver();
   convolver.buffer = createImpulse(ctx);
   const wet = ctx.createGain();
+  wet.gain.value = settings.reverb / 100 * .72;
+  const delay = ctx.createDelay(1.5);
+  delay.delayTime.value = .28;
+  const delayFeedback = ctx.createGain();
+  delayFeedback.gain.value = .2;
+  const delayWet = ctx.createGain();
+  delayWet.gain.value = settings.delay / 100 * .34;
+  const chorusDelay = ctx.createDelay(.05);
+  chorusDelay.delayTime.value = .022;
+  const chorusWet = ctx.createGain();
+  chorusWet.gain.value = settings.chorus / 100 * .28;
+  const chorusOscillator = ctx.createOscillator();
+  chorusOscillator.type = 'sine';
+  chorusOscillator.frequency.value = .32;
+  const chorusDepth = ctx.createGain();
+  chorusDepth.gain.value = settings.chorus / 100 * .0035;
+  chorusOscillator.connect(chorusDepth);
+  chorusDepth.connect(chorusDelay.delayTime);
+  chorusOscillator.start();
+
+  const fadeGain = ctx.createGain();
+  fadeGain.gain.value = 1;
   const master = ctx.createGain();
-  dry.gain.value = 1 - state.reverb / 100 * .24;
-  wet.gain.value = state.reverb / 100 * .72;
-  master.gain.value = state.volume / 100;
-  sourceNode.connect(eq);
-  eq.connect(dry); dry.connect(master);
-  eq.connect(convolver); convolver.connect(wet); wet.connect(master);
+  master.gain.value = settings.volume / 100;
+
+  chain.connect(dry); dry.connect(fadeGain);
+  chain.connect(convolver); convolver.connect(wet); wet.connect(fadeGain);
+  chain.connect(delay); delay.connect(delayFeedback); delayFeedback.connect(delay);
+  delay.connect(delayWet); delayWet.connect(fadeGain);
+  chain.connect(chorusDelay); chorusDelay.connect(chorusWet); chorusWet.connect(fadeGain);
+  fadeGain.connect(master);
   master.connect(ctx.destination);
-  return { eq, dryGain: dry, wetGain: wet, convolver, masterGain: master };
+
+  const nodes = {
+    eq, eqBands, compressor, saturation, tapeTone, widthLeft, widthRight, widthMerger,
+    dryGain: dry, wetGain: wet, convolver, delayWet, delayFeedback,
+    chorusWet, chorusDepth, fadeGain, masterGain: master,
+    effectModulators: [chorusOscillator],
+    effectGraphNodes: [eq, ...eqBands, compressor, saturation, tapeTone, dry, convolver, wet, delay, delayFeedback, delayWet, chorusDelay, chorusWet, chorusOscillator, chorusDepth, fadeGain, master, ...(widthMerger ? [widthMerger] : [])],
+  };
+  applyAdvancedGraphSettings(nodes, settings, ctx);
+  return nodes;
+}
+
+function schedulePlaybackFades(fadeGain, ctx, segmentDuration, effectiveRate, startsAtBoundary = true) {
+  if (!fadeGain) return;
+  const now = ctx.currentTime;
+  const playbackDuration = segmentDuration / Math.max(.05, effectiveRate);
+  const fadeIn = startsAtBoundary ? Math.min(state.fadeIn, playbackDuration / 2) / Math.max(.05, effectiveRate) : 0;
+  const fadeOut = Math.min(state.fadeOut, playbackDuration / 2) / Math.max(.05, effectiveRate);
+  fadeGain.gain.cancelScheduledValues(now);
+  fadeGain.gain.setValueAtTime(fadeIn > 0 ? 0 : 1, now);
+  if (fadeIn > 0) fadeGain.gain.linearRampToValueAtTime(1, now + fadeIn);
+  if (fadeOut > 0) {
+    const fadeStart = Math.max(now + fadeIn, now + playbackDuration - fadeOut);
+    fadeGain.gain.setValueAtTime(1, fadeStart);
+    fadeGain.gain.linearRampToValueAtTime(0, now + playbackDuration);
+  }
+}
+
+function getTrimBounds(track = getSelectedTrack()) {
+  if (!track) return { start: 0, end: 0 };
+  const start = Math.max(0, Math.min(track.duration, Number(state.trimStart) || 0));
+  const end = Math.max(start + .05, Math.min(track.duration, Number(state.trimEnd ?? track.duration) || track.duration));
+  return { start: Math.min(start, track.duration - .05), end: Math.max(start + .05, end) };
+}
+
+function reverseAudioBuffer(buffer) {
+  const reversed = new AudioBuffer({ length: buffer.length, numberOfChannels: buffer.numberOfChannels, sampleRate: buffer.sampleRate });
+  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+    const source = buffer.getChannelData(channel);
+    const target = reversed.getChannelData(channel);
+    for (let index = 0, end = source.length - 1; index < source.length; index++, end--) target[index] = source[end];
+  }
+  return reversed;
+}
+
+function getPlaybackBuffer(track) {
+  if (!state.reverse) return track.buffer;
+  if (!track.reversedBuffer) track.reversedBuffer = reverseAudioBuffer(track.buffer);
+  return track.reversedBuffer;
+}
+
+function sliceAudioBuffer(buffer, startSeconds, endSeconds) {
+  const start = Math.max(0, Math.min(buffer.length - 1, Math.floor(startSeconds * buffer.sampleRate)));
+  const end = Math.max(start + 1, Math.min(buffer.length, Math.floor(endSeconds * buffer.sampleRate)));
+  const output = new AudioBuffer({ length: end - start, numberOfChannels: buffer.numberOfChannels, sampleRate: buffer.sampleRate });
+  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+    output.getChannelData(channel).set(buffer.getChannelData(channel).subarray(start, end));
+  }
+  return output;
+}
+
+function trimAndReverseBuffer(buffer, originalDuration, settings = state) {
+  const startBound = Math.max(0, Math.min(originalDuration, settings.trimStart || 0));
+  const endBound = Math.max(startBound + .05, Math.min(originalDuration, settings.trimEnd ?? originalDuration));
+  const timeScale = buffer.duration / originalDuration;
+  const cropped = sliceAudioBuffer(buffer, startBound * timeScale, endBound * timeScale);
+  return settings.reverse ? reverseAudioBuffer(cropped) : cropped;
+}
+
+function applyFades(buffer, fadeInSeconds = 0, fadeOutSeconds = 0) {
+  const output = new AudioBuffer({ length: buffer.length, numberOfChannels: buffer.numberOfChannels, sampleRate: buffer.sampleRate });
+  const fadeInFrames = Math.min(Math.floor(fadeInSeconds * buffer.sampleRate), Math.floor(buffer.length / 2));
+  const fadeOutFrames = Math.min(Math.floor(fadeOutSeconds * buffer.sampleRate), Math.floor(buffer.length / 2));
+  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+    const source = buffer.getChannelData(channel);
+    const target = output.getChannelData(channel);
+    for (let index = 0; index < buffer.length; index++) {
+      let gain = 1;
+      if (fadeInFrames > 0 && index < fadeInFrames) gain = Math.min(gain, index / fadeInFrames);
+      const fromEnd = buffer.length - 1 - index;
+      if (fadeOutFrames > 0 && fromEnd < fadeOutFrames) gain = Math.min(gain, fromEnd / fadeOutFrames);
+      target[index] = source[index] * gain;
+    }
+  }
+  return output;
 }
 
 async function startPlayback(position = state.pausedPosition) {
