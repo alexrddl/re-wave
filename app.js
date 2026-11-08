@@ -63,6 +63,8 @@ const elements = {
   speedValue: $('speedValue'), pitchValue: $('pitchValue'), reverbValue: $('reverbValue'),
   bassValue: $('bassValue'), volumeValue: $('volumeValue'), downloadButton: $('downloadButton'),
   statusLine: $('statusLine'), toast: $('toast'),
+  exportFormat: $('exportFormat'), mp3Bitrate: $('mp3Bitrate'), mp3BitrateWrap: $('mp3BitrateWrap'),
+  masterExportFormat: $('masterExportFormat'), masterMp3Bitrate: $('masterMp3Bitrate'), masterMp3BitrateWrap: $('masterMp3BitrateWrap'),
   remixView: $('remixView'), masteringView: $('masteringView'), remixActions: $('remixActions'),
   pageTitle: $('pageTitle'), pageEyebrow: $('pageEyebrow'),
   masterFileInput: $('masterFileInput'), masterDropzone: $('masterDropzone'), masterTrackList: $('masterTrackList'),
