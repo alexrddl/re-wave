@@ -1767,6 +1767,32 @@ function applyTrimInput(which) {
 }
 
 function wireEvents() {
+  elements.editorTabButtons.forEach((button) => button.addEventListener('click', () => switchEditorTab(button.dataset.editorTab)));
+  const advancedControls = [
+    [elements.eqLowSlider, 'eqLow'], [elements.eqLowMidSlider, 'eqLowMid'], [elements.eqMidSlider, 'eqMid'],
+    [elements.eqHighMidSlider, 'eqHighMid'], [elements.eqHighSlider, 'eqHigh'],
+    [elements.compressorSlider, 'compressor'], [elements.stereoWidthSlider, 'stereoWidth'],
+    [elements.saturationSlider, 'saturation'], [elements.tapeSlider, 'tape'],
+    [elements.delaySlider, 'delay'], [elements.chorusSlider, 'chorus'],
+  ];
+  advancedControls.forEach(([slider, key]) => slider.addEventListener('input', () => {
+    state[key] = Number(slider.value);
+    updateAdvancedLabels();
+    if (state.audioContext) applyAdvancedGraphSettings(state, state, state.audioContext);
+  }));
+  elements.eqResetButton.addEventListener('click', () => {
+    state.eqLow = 0; state.eqLowMid = 0; state.eqMid = 0; state.eqHighMid = 0; state.eqHigh = 0;
+    [elements.eqLowSlider, elements.eqLowMidSlider, elements.eqMidSlider, elements.eqHighMidSlider, elements.eqHighSlider].forEach((slider) => { slider.value = '0'; });
+    updateAdvancedLabels();
+    if (state.audioContext) applyAdvancedGraphSettings(state, state, state.audioContext);
+  });
+  elements.trimStartInput.addEventListener('change', () => applyTrimInput('start'));
+  elements.trimEndInput.addEventListener('change', () => applyTrimInput('end'));
+  elements.fadeInSlider.addEventListener('input', () => { state.fadeIn = Number(elements.fadeInSlider.value); updateToolsControls(); restartPlaybackAfterToolChange(); });
+  elements.fadeOutSlider.addEventListener('input', () => { state.fadeOut = Number(elements.fadeOutSlider.value); updateToolsControls(); restartPlaybackAfterToolChange(); });
+  elements.reverseToggle.addEventListener('change', () => { state.reverse = elements.reverseToggle.checked; restartPlaybackAfterToolChange(); });
+  elements.resetToolsButton.addEventListener('click', resetRemixTools);
+
   const chooseFiles = () => elements.fileInput.click();
   elements.addFilesButton.addEventListener('click', chooseFiles);
   elements.addMoreButton.addEventListener('click', chooseFiles);
@@ -1812,7 +1838,7 @@ function wireEvents() {
       showToast(`${button.querySelector('strong').textContent} — пресет применён.`);
     });
   });
-  $('resetButton').addEventListener('click', () => { applySettings(PRESETS.none, true, 'none'); showToast('Исходное звучание восстановлено.'); });
+  $('resetButton').addEventListener('click', () => { applySettings(PRESETS.none, false, 'none'); resetAdvancedEffects(); resetRemixTools(); setStatus('Все эффекты и монтаж сброшены.'); showToast('Исходное звучание восстановлено.'); });
   const controls = [
     [elements.speedSlider, 'speed'], [elements.pitchSlider, 'pitch'], [elements.reverbSlider, 'reverb'],
     [elements.bassSlider, 'bass'], [elements.volumeSlider, 'volume'],
@@ -1846,6 +1872,9 @@ function initialize() {
   updateMasterTarget(-14);
   renderMasterTrackList();
   updateExportFormatControls();
+  updateAdvancedLabels();
+  updateToolsControls();
+  switchEditorTab('sound');
   initializeViewFromLocation();
 }
 
