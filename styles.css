@@ -304,3 +304,29 @@ input[type=range]::-moz-range-thumb { width: 10px; height: 10px; background: #ff
 .master-all-button { padding: 9px 12px; font-size: 9px; white-space: nowrap; }
 .master-all-button:disabled { opacity: .42; cursor: not-allowed; transform: none; }
 @media (max-width: 390px) { .master-list-actions { flex-direction: column; }.master-all-button,.master-list-actions .button { width: 100%; } }
+
+/* 1.3 navigation guard: desktop uses the sidebar; compact tabs are mobile-only. */
+nav.mobile-view-nav { display: none !important; }
+.mobile-view-link { text-decoration: none !important; color: var(--muted); }
+.mobile-view-link.active { color: #2c1a10; background: var(--accent); }
+@media (max-width: 760px) {
+  nav.mobile-view-nav {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    gap: 5px;
+    padding: 8px 15px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(42,26,15,.48);
+  }
+  .mobile-view-link {
+    display: block;
+    text-align: center;
+    text-decoration: none !important;
+    border-radius: 8px;
+    padding: 9px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .mobile-view-link.active { color: #2c1a10; background: var(--accent); }
+}
