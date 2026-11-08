@@ -1147,11 +1147,27 @@ function clearMasterTracks() {
   showToast('Список альбома очищен.');
 }
 
-function wireMasteringEvents() {
-  document.querySelectorAll('[data-view]').forEach((link) => link.addEventListener('click', (event) => {
+function wireViewNavigation() {
+  // Delegate in capture phase so every navigation entry (sidebar and mobile tabs)
+  // is handled consistently, even if nested icons/text are clicked.
+  document.addEventListener('click', (event) => {
+    const link = event.target.closest?.('a[data-view]');
+    if (!link) return;
     event.preventDefault();
     switchView(link.dataset.view);
-  }));
+  }, true);
+
+  // Allow browser back/forward or manually edited hashes to restore the right panel.
+  window.addEventListener('hashchange', () => {
+    const hash = location.hash.toLowerCase();
+    if (hash === '#mastering' || hash === '#masteringview') switchView('mastering');
+    else if (hash === '#library') switchView('queue');
+    else if (hash === '#editor' || !hash) switchView('remix');
+  });
+}
+
+function wireMasteringEvents() {
+  wireViewNavigation();
   elements.masterDropzone.addEventListener('click', () => elements.masterFileInput.click());
   elements.masterFileInput.addEventListener('change', async (event) => {
     await addMasterFiles(event.target.files);
