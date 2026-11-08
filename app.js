@@ -1037,21 +1037,16 @@ function encodeWav(buffer, bitDepth = 16) {
 async function renderEffects(inputBuffer, settings) {
   const OfflineContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
   if (!OfflineContext) throw new Error('OfflineAudioContext не поддерживается этим браузером.');
-  const tailSeconds = settings.reverb > 0 ? 2.8 : 0;
-  const length = inputBuffer.length + Math.ceil(inputBuffer.sampleRate * tailSeconds);
+  const effectTail = Math.max(settings.reverb > 0 ? 2.8 : 0, settings.delay > 0 ? 1.8 : 0);
+  const length = inputBuffer.length + Math.ceil(inputBuffer.sampleRate * effectTail);
   const ctx = new OfflineContext(inputBuffer.numberOfChannels, length, inputBuffer.sampleRate);
   const source = ctx.createBufferSource();
   source.buffer = inputBuffer;
-  const eq = ctx.createBiquadFilter(); eq.type = 'lowshelf'; eq.frequency.value = 120; eq.gain.value = settings.bass;
-  const dry = ctx.createGain(); dry.gain.value = 1 - settings.reverb / 100 * .24;
-  const convolver = ctx.createConvolver(); convolver.buffer = createImpulse(ctx);
-  const wet = ctx.createGain(); wet.gain.value = settings.reverb / 100 * .72;
-  const master = ctx.createGain(); master.gain.value = settings.volume / 100;
-  source.connect(eq); eq.connect(dry); dry.connect(master); eq.connect(convolver); convolver.connect(wet); wet.connect(master);
-  master.connect(ctx.destination);
+  buildEffectGraph(ctx, source, inputBuffer.numberOfChannels, settings);
   source.start(0);
   return ctx.startRendering();
 }
+
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -1095,8 +1090,11 @@ async function exportTrack() {
         processed = await ctx.startRendering();
       }
     }
-    setStatus('Применяю Reverb, Bass и Volume…');
-    const rendered = await renderEffects(processed, state);
+    setStatus('Применяю монтаж: Trim, Reverse и Fade…');
+    const edited = trimAndReverseBuffer(processed, track.duration, state);
+    setStatus('Применяю EQ, компрессию и пространственные эффекты…');
+    const effected = await renderEffects(edited, state);
+    const rendered = applyFades(effected, state.fadeIn, state.fadeOut);
     const format = selectedFormat(elements.exportFormat);
     const bitrate = selectedBitrate(elements.mp3Bitrate);
     let output;
@@ -1117,13 +1115,12 @@ async function exportTrack() {
   } catch (error) {
     console.error('Export failed:', error);
     setStatus(error.message || 'Не удалось экспортировать файл.', 'error');
-    showToast('Ошибка экспорта. Попробуй трек меньшего размера.');
+    showToast(error.message || 'Ошибка экспорта. Проверь настройки и попробуй снова.');
   } finally {
     button.disabled = !getSelectedTrack();
     buttonLabel.textContent = 'Скачать ' + selectedFormat(elements.exportFormat).toUpperCase();
   }
 }
-
 
 function switchView(view) {
   // Normalize the queue shortcut to the editor view, but keep its scroll behavior.
