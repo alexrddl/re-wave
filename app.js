@@ -24,6 +24,8 @@ const state = {
   source: null,
   stNode: null,
   eq: null,
+  eqBands: null, compressorNode: null, saturationNode: null, tapeTone: null,
+  widthLeft: null, widthRight: null, delayWet: null, delayFeedback: null, chorusWet: null, chorusDepth: null, fadeGain: null,
   convolver: null,
   dryGain: null,
   wetGain: null,
@@ -470,12 +472,12 @@ function applyAdvancedGraphSettings(nodes, settings, ctx) {
   const bands = [settings.eqLow, settings.eqLowMid, settings.eqMid, settings.eqHighMid, settings.eqHigh];
   nodes.eqBands?.forEach((filter, index) => { filter.gain.setTargetAtTime(bands[index], ctx.currentTime, .025); });
   const compression = settings.compressor / 100;
-  if (nodes.compressor) {
-    nodes.compressor.threshold.setTargetAtTime(settings.compressor ? -6 - compression * 24 : 0, ctx.currentTime, .025);
-    nodes.compressor.ratio.setTargetAtTime(settings.compressor ? 1 + compression * 5.5 : 1, ctx.currentTime, .025);
-    nodes.compressor.knee.setTargetAtTime(12, ctx.currentTime, .025);
+  if (nodes.compressorNode) {
+    nodes.compressorNode.threshold.setTargetAtTime(settings.compressor ? -6 - compression * 24 : 0, ctx.currentTime, .025);
+    nodes.compressorNode.ratio.setTargetAtTime(settings.compressor ? 1 + compression * 5.5 : 1, ctx.currentTime, .025);
+    nodes.compressorNode.knee.setTargetAtTime(12, ctx.currentTime, .025);
   }
-  if (nodes.saturation) nodes.saturation.curve = makeSaturationCurve(settings.saturation, settings.tape);
+  if (nodes.saturationNode) nodes.saturationNode.curve = makeSaturationCurve(settings.saturation, settings.tape);
   if (nodes.tapeTone) nodes.tapeTone.gain.setTargetAtTime(-settings.tape * .028, ctx.currentTime, .025);
   if (nodes.widthLeft) nodes.widthLeft.gain.setTargetAtTime(settings.stereoWidth / 100, ctx.currentTime, .025);
   if (nodes.widthRight) nodes.widthRight.gain.setTargetAtTime(-settings.stereoWidth / 100, ctx.currentTime, .025);
@@ -590,7 +592,7 @@ function buildEffectGraph(ctx, sourceNode, channelCount = 2, settings = state) {
   master.connect(ctx.destination);
 
   const nodes = {
-    eq, eqBands, compressor, saturation, tapeTone, widthLeft, widthRight, widthMerger,
+    eq, eqBands, compressorNode: compressor, saturationNode: saturation, tapeTone, widthLeft, widthRight, widthMerger,
     dryGain: dry, wetGain: wet, convolver, delayWet, delayFeedback,
     chorusWet, chorusDepth, fadeGain, masterGain: master,
     effectModulators: [chorusOscillator],
@@ -737,8 +739,8 @@ async function startPlayback(position = state.pausedPosition) {
           if (state.effectGraphNodes === graphNodes) {
             state.effectGraphNodes = [];
             state.effectModulators = [];
-            state.eq = null; state.eqBands = null; state.compressor = null;
-            state.saturation = null; state.tapeTone = null; state.widthLeft = null; state.widthRight = null;
+            state.eq = null; state.eqBands = null; state.compressorNode = null;
+            state.saturationNode = null; state.tapeTone = null; state.widthLeft = null; state.widthRight = null;
             state.dryGain = null; state.wetGain = null; state.convolver = null;
             state.delayWet = null; state.chorusWet = null; state.chorusDepth = null;
             state.fadeGain = null; state.masterGain = null;
@@ -784,8 +786,8 @@ function stopPlayback(keepPosition = true) {
   state.stNode = null;
   state.effectModulators = [];
   state.effectGraphNodes = [];
-  state.eq = null; state.eqBands = null; state.compressor = null;
-  state.saturation = null; state.tapeTone = null; state.widthLeft = null; state.widthRight = null;
+  state.eq = null; state.eqBands = null; state.compressorNode = null;
+  state.saturationNode = null; state.tapeTone = null; state.widthLeft = null; state.widthRight = null;
   state.dryGain = null; state.wetGain = null; state.convolver = null;
   state.delayWet = null; state.chorusWet = null; state.chorusDepth = null;
   state.fadeGain = null; state.masterGain = null;
