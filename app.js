@@ -562,6 +562,106 @@ function drawProgressAfterResize() {
   if (track) drawWaveform(track.buffer, getCurrentPosition() / track.duration);
 }
 
+let mp3EncoderPromise = null;
+
+async function ensureMp3Encoder() {
+  if (window.lamejs?.Mp3Encoder) return window.lamejs;
+  if (!mp3EncoderPromise) {
+    mp3EncoderPromise = (async () => {
+      const sources = [
+        'https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js',
+        'https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js',
+      ];
+      let lastError = null;
+      for (const src of sources) {
+        try {
+          await new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = src;
+            script.async = true;
+            script.dataset.mp3Encoder = 'true';
+            script.onload = () => window.lamejs?.Mp3Encoder ? resolve() : reject(new Error('LAME загрузился, но Mp3Encoder не найден.'));
+            script.onerror = () => { script.remove(); reject(new Error('Не удалось загрузить MP3-кодировщик.')); };
+            document.head.appendChild(script);
+          });
+          return window.lamejs;
+        } catch (error) { lastError = error; }
+      }
+      throw lastError || new Error('MP3-кодировщик недоступен. Проверь подключение к интернету.');
+    })().catch((error) => { mp3EncoderPromise = null; throw error; });
+  }
+  return mp3EncoderPromise;
+}
+
+function nearestMp3SampleRate(sampleRate) {
+  const supported = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
+  return supported.reduce((best, candidate) => Math.abs(candidate - sampleRate) < Math.abs(best - sampleRate) ? candidate : best, supported[0]);
+}
+
+async function prepareMp3Buffer(buffer) {
+  const supportedRates = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
+  const outputChannels = Math.min(2, buffer.numberOfChannels);
+  const outputRate = supportedRates.includes(buffer.sampleRate) ? buffer.sampleRate : nearestMp3SampleRate(buffer.sampleRate);
+  if (outputChannels === buffer.numberOfChannels && outputRate === buffer.sampleRate) return buffer;
+  const OfflineContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if (!OfflineContext) throw new Error('Для подготовки MP3 требуется OfflineAudioContext.');
+  const frames = Math.max(1, Math.ceil(buffer.duration * outputRate));
+  const context = new OfflineContext(outputChannels, frames, outputRate);
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  source.connect(context.destination);
+  source.start(0);
+  return context.startRendering();
+}
+
+function floatToPcm16(value) {
+  const sample = Math.max(-1, Math.min(1, value));
+  return sample < 0 ? Math.round(sample * 32768) : Math.round(sample * 32767);
+}
+
+async function encodeMp3(buffer, bitrate = 320, onProgress = null) {
+  const library = await ensureMp3Encoder();
+  const prepared = await prepareMp3Buffer(buffer);
+  const channels = prepared.numberOfChannels;
+  if (channels !== 1 && channels !== 2) throw new Error('MP3 экспорт поддерживает mono или stereo.');
+  const encoder = new library.Mp3Encoder(channels, prepared.sampleRate, Number(bitrate));
+  const channelData = Array.from({ length: channels }, (_, index) => prepared.getChannelData(index));
+  const blockSize = 1152;
+  const outputChunks = [];
+  const totalFrames = prepared.length;
+  for (let offset = 0; offset < totalFrames; offset += blockSize) {
+    const size = Math.min(blockSize, totalFrames - offset);
+    const left = new Int16Array(size);
+    const right = channels === 2 ? new Int16Array(size) : null;
+    for (let index = 0; index < size; index++) {
+      left[index] = floatToPcm16(channelData[0][offset + index]);
+      if (right) right[index] = floatToPcm16(channelData[1][offset + index]);
+    }
+    const encoded = channels === 2 ? encoder.encodeBuffer(left, right) : encoder.encodeBuffer(left);
+    if (encoded?.length) outputChunks.push(new Uint8Array(encoded));
+    if (onProgress && (offset === 0 || offset % (blockSize * 96) === 0 || offset + size >= totalFrames)) {
+      onProgress(totalFrames ? Math.min(100, ((offset + size) / totalFrames) * 100) : 100);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+  const tail = encoder.flush();
+  if (tail?.length) outputChunks.push(new Uint8Array(tail));
+  if (!outputChunks.length) throw new Error('MP3-кодировщик вернул пустой файл.');
+  return new Blob(outputChunks, { type: 'audio/mpeg' });
+}
+
+function selectedFormat(selectElement) { return selectElement?.value === 'mp3' ? 'mp3' : 'wav'; }
+function selectedBitrate(selectElement) {
+  const value = Number(selectElement?.value || 320);
+  return [128, 192, 256, 320].includes(value) ? value : 320;
+}
+
+function updateExportFormatControls() {
+  const remixMp3 = selectedFormat(elements.exportFormat) === 'mp3';
+  elements.mp3BitrateWrap.hidden = !remixMp3;
+  elements.downloadButton.querySelector('span').textContent = 'Скачать ' + (remixMp3 ? 'MP3' : 'WAV');
+  elements.masterMp3BitrateWrap.hidden = selectedFormat(elements.masterExportFormat) !== 'mp3';
+}
 function encodeWav(buffer, bitDepth = 16) {
   if (![16, 24].includes(bitDepth)) throw new Error('Поддерживается экспорт WAV 16-bit или 24-bit.');
   const channels = buffer.numberOfChannels;
