@@ -194,6 +194,7 @@ function applySettings(settings, announce = true, presetKey = null) {
   if (state.dryGain) state.dryGain.gain.setTargetAtTime(1 - (state.reverb / 100) * 0.24, state.audioContext.currentTime, 0.025);
   if (state.wetGain) state.wetGain.gain.setTargetAtTime((state.reverb / 100) * 0.72, state.audioContext.currentTime, 0.025);
   if (state.masterGain) state.masterGain.gain.setTargetAtTime(state.volume / 100, state.audioContext.currentTime, 0.025);
+  if (state.audioContext) applyAdvancedGraphSettings(state, state, state.audioContext);
   if (announce) setStatus('Настройки обновлены. Можешь слушать или скачать результат.');
 }
 
@@ -269,17 +270,21 @@ function selectTrack(id) {
   if (!track) return;
   stopPlayback(true);
   state.selectedId = id;
-  state.pausedPosition = 0;
+  state.trimStart = 0;
+  state.trimEnd = track.duration;
+  state.pausedPosition = state.reverse ? track.duration : 0;
+  state.reversedBuffer = null;
   elements.currentTrackName.textContent = track.name;
   elements.currentTrackInfo.textContent = `${formatTime(track.duration)} · ${formatBytes(track.size)} · ${track.buffer.numberOfChannels} ch`;
   elements.playerTrackName.textContent = track.name;
   elements.playerTrackMeta.textContent = `${formatTime(track.duration)} · ${track.buffer.sampleRate.toLocaleString('ru-RU')} Hz`;
   elements.duration.textContent = formatTime(track.duration);
-  elements.currentTime.textContent = '0:00';
+  elements.currentTime.textContent = formatTime(state.pausedPosition);
   elements.downloadButton.disabled = false;
   elements.wavePlaceholder.style.display = 'none';
   renderTrackList();
-  drawWaveform(track.buffer, 0);
+  drawWaveform(track.buffer, state.pausedPosition / track.duration);
+  updateToolsControls();
   applySettings(PRESETS.none, false, 'none');
   setStatus('Трек готов. Выбери пресет или настрой эффекты вручную.');
 }
@@ -366,30 +371,38 @@ function roundRect(ctx, x, y, w, h, r) {
 function getCurrentPosition() {
   const track = getSelectedTrack();
   if (!track) return 0;
+  const bounds = getTrimBounds(track);
   if (state.isPlaying && state.audioContext) {
     const elapsed = Math.max(0, state.audioContext.currentTime - state.startedAt);
     const effectiveRate = state.usingFallback ? state.speed * state.pitch : state.speed;
-    return Math.min(track.duration, state.offsetAtStart + elapsed * effectiveRate);
+    const raw = state.playbackReverse
+      ? state.offsetAtStart - elapsed * effectiveRate
+      : state.offsetAtStart + elapsed * effectiveRate;
+    return Math.max(bounds.start, Math.min(bounds.end, raw));
   }
-  return Math.min(track.duration, state.pausedPosition);
+  return Math.max(bounds.start, Math.min(bounds.end, state.pausedPosition));
 }
 
 function updateProgress() {
   const track = getSelectedTrack();
   if (!track) return;
   const position = getCurrentPosition();
+  const bounds = getTrimBounds(track);
   const ratio = track.duration ? position / track.duration : 0;
   elements.currentTime.textContent = formatTime(position);
   elements.miniProgressFill.style.width = `${ratio * 100}%`;
   drawWaveform(track.buffer, ratio);
-  if (state.isPlaying && position >= track.duration) {
+  const finished = state.playbackReverse ? position <= bounds.start + .015 : position >= bounds.end - .015;
+  if (state.isPlaying && finished) {
+    const restartPosition = state.playbackReverse ? bounds.end : bounds.start;
     if (state.isLooping) {
-      startPlayback(0);
+      startPlayback(restartPosition);
     } else {
-      state.pausedPosition = 0;
+      state.pausedPosition = restartPosition;
       stopPlayback(false);
-      elements.currentTime.textContent = '0:00';
-      drawWaveform(track.buffer, 0);
+      elements.currentTime.textContent = formatTime(restartPosition);
+      elements.miniProgressFill.style.width = `${(restartPosition / track.duration) * 100}%`;
+      drawWaveform(track.buffer, restartPosition / track.duration);
     }
     return;
   }
