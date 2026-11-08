@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#24150e">
-  <meta name="description" content="Бесплатная браузерная студия для slowed + reverb, nightcore и других аудио-эффектов.">
-  <title>RDDL:WAVE — Audio Remix Studio</title>
+  <meta name="description" content="Браузерная аудиостудия для ремиксов, анализа громкости LUFS и мастеринга альбомов.">
+  <title>RE:WAVE — Audio Remix & Loudness Mastering</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -16,13 +16,14 @@
     <aside class="sidebar">
       <a class="brand" href="#top" aria-label="RE:WAVE home">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-        <span class="brand-name">rddl<span>:</span>wave</span>
+        <span class="brand-name">re<span>:</span>wave</span>
       </a>
 
       <div class="side-caption">WORKSPACE</div>
       <nav class="side-nav" aria-label="Основная навигация">
-        <a class="nav-link active" href="#editor"><span class="nav-icon">◈</span> Редактор</a>
-        <a class="nav-link" href="#library"><span class="nav-icon">▤</span> Моя очередь</a>
+        <a class="nav-link active" href="#editor" data-view="remix"><span class="nav-icon">◈</span> Редактор</a>
+        <a class="nav-link" href="#mastering" data-view="mastering"><span class="nav-icon">◉</span> Мастеринг громкости</a>
+        <a class="nav-link" href="#library" data-view="queue"><span class="nav-icon">▤</span> Моя очередь</a>
       </nav>
 
       <div class="sidebar-bottom">
@@ -32,7 +33,7 @@
           <p>Треки не загружаются на сервер. Всё происходит в твоём браузере.</p>
         </div>
         <a class="side-foot" href="https://github.com/" target="_blank" rel="noreferrer">GitHub Pages <span>↗</span></a>
-        <span class="version">RDDL:WAVE · 1.1</span>
+        <span class="version">RE:WAVE · 1.2</span>
       </div>
     </aside>
 
@@ -40,16 +41,22 @@
       <header class="topbar">
         <div class="mobile-brand"><span class="brand-mark small" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span> re<span>:</span>wave</div>
         <div class="topbar-left">
-          <span class="eyebrow">YOUR PERSONAL AUDIO LAB</span>
-          <h1>Remix studio<span class="title-dot">.</span></h1>
+          <span class="eyebrow" id="pageEyebrow">YOUR PERSONAL AUDIO LAB</span>
+          <h1 id="pageTitle">Remix studio<span class="title-dot">.</span></h1>
         </div>
-        <div class="topbar-actions">
+        <div class="topbar-actions" id="remixActions">
           <button class="button button-quiet" id="clearButton" type="button" title="Очистить очередь">Очистить</button>
           <button class="button button-primary" id="addFilesButton" type="button"><span class="plus">＋</span> Добавить треки</button>
           <input id="fileInput" type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac,.aac" multiple hidden>
         </div>
       </header>
 
+      <nav class="mobile-view-nav" aria-label="Разделы">
+        <a class="mobile-view-link active" href="#editor" data-view="remix">Ремикс</a>
+        <a class="mobile-view-link" href="#mastering" data-view="mastering">Мастеринг</a>
+      </nav>
+
+      <div id="remixView">
       <section class="workspace" id="editor">
         <div class="library-panel" id="library">
           <div class="panel-heading">
@@ -185,6 +192,77 @@
           </div>
           <div class="status-line" id="statusLine" role="status" aria-live="polite">Добавь трек, чтобы начать.</div>
         </div>
+      </section>
+      </div>
+
+      <section class="mastering-view" id="masteringView" hidden>
+        <div class="mastering-intro">
+          <div>
+            <span class="eyebrow">ALBUM LOUDNESS WORKSPACE</span>
+            <h2>Мастеринг громкости<span class="title-dot">.</span></h2>
+            <p>Сравни громкость до 20 треков и выровняй их под единую цель в LUFS.</p>
+          </div>
+          <div class="master-privacy"><span>⌁</span><div><strong>Локальная обработка</strong><small>Аудио не покидает твой браузер</small></div></div>
+        </div>
+
+        <div class="master-upload-row">
+          <button class="master-dropzone" id="masterDropzone" type="button">
+            <span class="master-upload-icon">↑</span>
+            <strong>Добавить треки альбома</strong>
+            <span>Перетащи сюда или выбери аудиофайлы</span>
+            <small>MP3 · WAV · FLAC · M4A · OGG · до 20 файлов</small>
+          </button>
+          <input id="masterFileInput" type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac,.aac" multiple hidden>
+          <div class="master-tip-card">
+            <span class="master-tip-icon">ⓘ</span>
+            <strong>Как работает мастеринг?</strong>
+            <p>Измеряем воспринимаемую громкость (Integrated LUFS), оцениваем True Peak и подбираем усиление для каждого трека отдельно. На экспорте применяется защита пиков и сохраняется 24-bit WAV.</p>
+          </div>
+        </div>
+
+        <section class="master-target-card">
+          <div class="master-section-heading">
+            <div><span class="eyebrow">LOUDNESS TARGET</span><h3>К какой громкости привести альбом?</h3></div>
+            <span class="target-value" id="masterTargetValue">−14 LUFS</span>
+          </div>
+          <div class="target-presets">
+            <button class="target-preset active" type="button" data-target="-14"><strong>Нормальная</strong><span>−14 LUFS</span><small>Более спокойное звучание</small></button>
+            <button class="target-preset" type="button" data-target="-9"><strong>Громкая</strong><span>−9 LUFS</span><small>Плотнее и громче</small></button>
+          </div>
+          <div class="target-custom-row">
+            <label for="masterTargetSlider">Своя цель</label>
+            <input id="masterTargetSlider" type="range" min="-20" max="-6" value="-14" step="0.5">
+            <output id="masterTargetCustomValue">−14 LUFS</output>
+          </div>
+          <div class="ceiling-row">
+            <label for="truePeakCeiling">Потолок True Peak</label>
+            <select id="truePeakCeiling">
+              <option value="-1" selected>−1.0 dBTP · рекомендовано</option>
+              <option value="-1.5">−1.5 dBTP · запас</option>
+              <option value="-2">−2.0 dBTP · больше запаса</option>
+            </select>
+          </div>
+          <p class="master-note">Цели LUFS — ориентиры, а не обязательные стандарты всех площадок. При сильных пиках ограничитель может немного снизить итоговую громкость относительно выбранной цели.</p>
+        </section>
+
+        <section class="master-stats-grid" aria-live="polite">
+          <div class="master-stat-card"><span>СРЕДНЯЯ ГРОМКОСТЬ · ИСХОДНАЯ</span><strong id="masterAverageLufs">—</strong><small>Энергетическое среднее по трекам</small></div>
+          <div class="master-stat-card"><span>РАЗБРОС АЛЬБОМА</span><strong id="masterLoudnessSpread">—</strong><small id="masterSpreadHint">Разница между самым тихим и громким</small></div>
+          <div class="master-stat-card"><span>ДОБАВЛЕНО ТРЕКОВ</span><strong id="masterTrackCount">0 / 20</strong><small id="masterAnalysisState">Ожидают загрузки</small></div>
+          <div class="master-stat-card"><span>СРЕДНИЙ TRUE PEAK</span><strong id="masterAveragePeak">—</strong><small>Оценка пикового уровня</small></div>
+        </section>
+
+        <section class="master-tracks-card">
+          <div class="master-list-heading">
+            <div><span class="eyebrow">ALBUM TRACKS</span><h3>Треки для мастеринга <span class="count-badge" id="masterCountBadge">0</span></h3></div>
+            <div class="master-list-actions"><button class="button button-primary master-all-button" id="masterAllButton" type="button" disabled>Мастерить весь альбом ↓</button><button class="button button-quiet" id="masterClearButton" type="button" disabled>Очистить</button></div>
+          </div>
+          <div class="master-progress-wrap" id="masterProgressWrap" hidden><div class="master-progress-label"><span id="masterProgressText">Анализ…</span><strong id="masterProgressPercent">0%</strong></div><div class="master-progress"><span id="masterProgressFill"></span></div></div>
+          <div class="master-empty" id="masterEmpty"><div>♫</div><strong>Альбом пока пуст</strong><p>Загрузи несколько песен, чтобы сравнить их громкость.</p></div>
+          <div class="master-track-list" id="masterTrackList" hidden></div>
+        </section>
+
+        <div class="master-footer-note"><span>✦</span> После анализа нажми «Скачать master» у нужного трека. Каждый файл будет экспортирован в WAV с одинаковой целевой громкостью и контролем пиков.</div>
       </section>
     </main>
   </div>

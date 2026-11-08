@@ -43,6 +43,13 @@ const state = {
   toastTimer: null,
 };
 
+const mastering = {
+  tracks: [],
+  targetLufs: -14,
+  truePeakCeiling: -1,
+  busy: false,
+};
+
 const elements = {
   fileInput: $('fileInput'), addFilesButton: $('addFilesButton'), addMoreButton: $('addMoreButton'),
   clearButton: $('clearButton'), dropzone: $('dropzone'), trackList: $('trackList'), emptyQueue: $('emptyQueue'),
@@ -56,6 +63,17 @@ const elements = {
   speedValue: $('speedValue'), pitchValue: $('pitchValue'), reverbValue: $('reverbValue'),
   bassValue: $('bassValue'), volumeValue: $('volumeValue'), downloadButton: $('downloadButton'),
   statusLine: $('statusLine'), toast: $('toast'),
+  remixView: $('remixView'), masteringView: $('masteringView'), remixActions: $('remixActions'),
+  pageTitle: $('pageTitle'), pageEyebrow: $('pageEyebrow'),
+  masterFileInput: $('masterFileInput'), masterDropzone: $('masterDropzone'), masterTrackList: $('masterTrackList'),
+  masterEmpty: $('masterEmpty'), masterCountBadge: $('masterCountBadge'), masterClearButton: $('masterClearButton'), masterAllButton: $('masterAllButton'),
+  masterProgressWrap: $('masterProgressWrap'), masterProgressText: $('masterProgressText'),
+  masterProgressPercent: $('masterProgressPercent'), masterProgressFill: $('masterProgressFill'),
+  masterAverageLufs: $('masterAverageLufs'), masterLoudnessSpread: $('masterLoudnessSpread'),
+  masterSpreadHint: $('masterSpreadHint'), masterTrackCount: $('masterTrackCount'),
+  masterAnalysisState: $('masterAnalysisState'), masterAveragePeak: $('masterAveragePeak'),
+  masterTargetValue: $('masterTargetValue'), masterTargetSlider: $('masterTargetSlider'),
+  masterTargetCustomValue: $('masterTargetCustomValue'), truePeakCeiling: $('truePeakCeiling'),
 };
 
 function setStatus(message, kind = '') {
@@ -542,11 +560,12 @@ function drawProgressAfterResize() {
   if (track) drawWaveform(track.buffer, getCurrentPosition() / track.duration);
 }
 
-function encodeWav(buffer) {
+function encodeWav(buffer, bitDepth = 16) {
+  if (![16, 24].includes(bitDepth)) throw new Error('Поддерживается экспорт WAV 16-bit или 24-bit.');
   const channels = buffer.numberOfChannels;
   const sampleRate = buffer.sampleRate;
   const frames = buffer.length;
-  const bytesPerSample = 2;
+  const bytesPerSample = bitDepth / 8;
   const blockAlign = channels * bytesPerSample;
   const dataSize = frames * blockAlign;
   const arrayBuffer = new ArrayBuffer(44 + dataSize);
@@ -556,14 +575,24 @@ function encodeWav(buffer) {
   writeString(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
   view.setUint16(22, channels, true); view.setUint32(24, sampleRate, true);
   view.setUint32(28, sampleRate * blockAlign, true); view.setUint16(32, blockAlign, true);
-  view.setUint16(34, 16, true); writeString(36, 'data'); view.setUint32(40, dataSize, true);
+  view.setUint16(34, bitDepth, true); writeString(36, 'data'); view.setUint32(40, dataSize, true);
   const channelData = Array.from({ length: channels }, (_, i) => buffer.getChannelData(i));
   let offset = 44;
   for (let frame = 0; frame < frames; frame++) {
     for (let channel = 0; channel < channels; channel++) {
-      const sample = Math.max(-1, Math.min(1, channelData[channel][frame]));
-      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-      offset += 2;
+      let sample = Math.max(-1, Math.min(1, channelData[channel][frame]));
+      if (bitDepth === 16) {
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      } else {
+        // TPDF dither at the 24-bit quantization step.
+        sample = Math.max(-1, Math.min(1, sample + (Math.random() - Math.random()) / 0x800000));
+        let value = Math.round(sample < 0 ? sample * 0x800000 : sample * 0x7fffff);
+        if (value < 0) value += 0x1000000;
+        view.setUint8(offset, value & 0xff);
+        view.setUint8(offset + 1, (value >> 8) & 0xff);
+        view.setUint8(offset + 2, (value >> 16) & 0xff);
+      }
+      offset += bytesPerSample;
     }
   }
   return new Blob([arrayBuffer], { type: 'audio/wav' });
@@ -648,6 +677,488 @@ async function exportTrack() {
   }
 }
 
+
+function switchView(view) {
+  const showMastering = view === 'mastering';
+  const mobileView = showMastering ? 'mastering' : 'remix';
+  elements.remixView.hidden = showMastering;
+  elements.masteringView.hidden = !showMastering;
+  elements.remixActions.hidden = showMastering;
+  document.body.classList.toggle('mastering-active', showMastering);
+  elements.pageEyebrow.textContent = showMastering ? 'ALBUM LOUDNESS WORKSPACE' : 'YOUR PERSONAL AUDIO LAB';
+  elements.pageTitle.innerHTML = showMastering ? 'Album mastering<span class="title-dot">.</span>' : 'Remix studio<span class="title-dot">.</span>';
+  document.querySelectorAll('[data-view]').forEach((link) => {
+    const isMobileLink = link.classList.contains('mobile-view-link');
+    const active = link.dataset.view === (isMobileLink ? mobileView : view);
+    link.classList.toggle('active', active);
+    if (!isMobileLink && link.matches('a.nav-link')) link.setAttribute('aria-current', active ? 'page' : 'false');
+  });
+  if (showMastering) renderMasterStats();
+  if (view === 'queue') $('library').scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+}
+
+function setMasterControlsDisabled(disabled) {
+  elements.masterDropzone.disabled = disabled;
+  elements.masterFileInput.disabled = disabled;
+  elements.masterTargetSlider.disabled = disabled;
+  elements.truePeakCeiling.disabled = disabled;
+  document.querySelectorAll('.target-preset').forEach((button) => { button.disabled = disabled; });
+}
+
+function setMasterProgress(percent, message) {
+  const safePercent = Math.max(0, Math.min(100, percent));
+  elements.masterProgressWrap.hidden = false;
+  elements.masterProgressText.textContent = message;
+  elements.masterProgressPercent.textContent = `${Math.round(safePercent)}%`;
+  elements.masterProgressFill.style.width = `${safePercent}%`;
+}
+
+function hideMasterProgress() {
+  elements.masterProgressWrap.hidden = true;
+  elements.masterProgressFill.style.width = '0%';
+}
+
+function masterDbToGain(db) { return Math.pow(10, db / 20); }
+function masterGainToDb(gain) { return 20 * Math.log10(Math.max(1e-12, gain)); }
+function formatLufs(value) { return Number.isFinite(value) ? `${value < 0 ? '−' : '+'}${Math.abs(value).toFixed(1)} LUFS` : '—'; }
+function formatDbtp(value) { return Number.isFinite(value) ? `${value < 0 ? '−' : '+'}${Math.abs(value).toFixed(1)} dBTP` : '—'; }
+function cleanAudioName(name) { return String(name).replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_').trim() || 'audio'; }
+
+function loudnessChannelWeights(channelCount) {
+  if (channelCount === 1) return [1];
+  if (channelCount === 2) return [1, 1];
+  if (channelCount === 3) return [1, 1, 1];
+  if (channelCount === 4) return [1, 1, 1.41, 1.41];
+  if (channelCount === 5) return [1, 1, 1, 1.41, 1.41];
+  if (channelCount === 6) return [1, 1, 1, 0, 1.41, 1.41];
+  return Array.from({ length: channelCount }, (_, index) => index === 3 ? 0 : (index >= 4 ? 1.41 : 1));
+}
+
+async function analyzeIntegratedLufs(inputBuffer) {
+  const OfflineContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if (!OfflineContext) throw new Error('Браузер не поддерживает OfflineAudioContext. Используй актуальный Chrome или Edge.');
+  if (!inputBuffer || !inputBuffer.length) return null;
+  const frames = inputBuffer.length;
+  const context = new OfflineContext(inputBuffer.numberOfChannels, frames, inputBuffer.sampleRate);
+  const source = context.createBufferSource();
+  source.buffer = inputBuffer;
+  const highPass = context.createBiquadFilter();
+  highPass.type = 'highpass';
+  highPass.frequency.value = 38.135;
+  highPass.Q.value = 0.5003;
+  const highShelf = context.createBiquadFilter();
+  highShelf.type = 'highshelf';
+  highShelf.frequency.value = 1681.974;
+  highShelf.Q.value = 0.707;
+  highShelf.gain.value = 4.0;
+  source.connect(highPass);
+  highPass.connect(highShelf);
+  highShelf.connect(context.destination);
+  source.start(0);
+  const filtered = await context.startRendering();
+  const channels = Array.from({ length: filtered.numberOfChannels }, (_, channel) => filtered.getChannelData(channel));
+  const weights = loudnessChannelWeights(filtered.numberOfChannels);
+  const blockLength = Math.max(1, Math.min(frames, Math.round(filtered.sampleRate * 0.4)));
+  const hopLength = Math.max(1, Math.round(filtered.sampleRate * 0.1));
+
+  const frameEnergy = (frame) => {
+    let total = 0;
+    for (let channel = 0; channel < channels.length; channel++) {
+      const sample = channels[channel][frame];
+      total += sample * sample * weights[channel];
+    }
+    return total;
+  };
+  let rollingEnergy = 0;
+  for (let frame = 0; frame < blockLength; frame++) rollingEnergy += frameEnergy(frame);
+  const blockEnergies = [];
+  for (let start = 0; start + blockLength <= frames; start += hopLength) {
+    blockEnergies.push(rollingEnergy / blockLength);
+    const nextStart = start + hopLength;
+    if (nextStart + blockLength > frames) break;
+    const removeEnd = Math.min(frames, nextStart);
+    for (let frame = start; frame < removeEnd; frame++) rollingEnergy -= frameEnergy(frame);
+    const addStart = start + blockLength;
+    const addEnd = Math.min(frames, nextStart + blockLength);
+    for (let frame = addStart; frame < addEnd; frame++) rollingEnergy += frameEnergy(frame);
+  }
+  if (!blockEnergies.length) return null;
+  const toLufs = (energy) => energy > 0 ? -0.691 + 10 * Math.log10(energy) : -Infinity;
+  const absoluteGate = -70;
+  const absoluteBlocks = blockEnergies.filter((energy) => toLufs(energy) >= absoluteGate);
+  if (!absoluteBlocks.length) return null;
+  const preliminaryEnergy = absoluteBlocks.reduce((sum, value) => sum + value, 0) / absoluteBlocks.length;
+  const relativeGate = toLufs(preliminaryEnergy) - 10;
+  const gatedBlocks = absoluteBlocks.filter((energy) => toLufs(energy) >= Math.max(absoluteGate, relativeGate));
+  if (!gatedBlocks.length) return null;
+  const integratedEnergy = gatedBlocks.reduce((sum, value) => sum + value, 0) / gatedBlocks.length;
+  return toLufs(integratedEnergy);
+}
+
+async function measureApproxTruePeak(buffer, onProgress = null) {
+  let peak = 0;
+  const chunkSize = 262144;
+  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+    const data = buffer.getChannelData(channel);
+    for (let chunkStart = 0; chunkStart < data.length; chunkStart += chunkSize) {
+      const chunkEnd = Math.min(data.length, chunkStart + chunkSize);
+      for (let index = chunkStart; index < chunkEnd; index++) {
+        const current = data[index];
+        peak = Math.max(peak, Math.abs(current));
+        if (index === 0 || index >= data.length - 2) continue;
+        const y0 = data[index - 1], y1 = current, y2 = data[index + 1], y3 = data[index + 2];
+        const a = -0.5 * y0 + 1.5 * y1 - 1.5 * y2 + 0.5 * y3;
+        const b = y0 - 2.5 * y1 + 2 * y2 - 0.5 * y3;
+        const c = -0.5 * y0 + 0.5 * y2;
+        for (let phase = 1; phase < 4; phase++) {
+          const t = phase * 0.25;
+          peak = Math.max(peak, Math.abs(((a * t + b) * t + c) * t + y1));
+        }
+      }
+      if (onProgress) onProgress(((channel * data.length + chunkEnd) / (buffer.numberOfChannels * data.length)) * 100);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+  return masterGainToDb(peak);
+}
+
+function calculateMasterStats() {
+  const analyzed = mastering.tracks.filter((track) => Number.isFinite(track.lufs) && Number.isFinite(track.truePeak));
+  if (!analyzed.length) return null;
+  const meanEnergy = analyzed.reduce((sum, track) => sum + Math.pow(10, (track.lufs + 0.691) / 10), 0) / analyzed.length;
+  const averageLufs = -0.691 + 10 * Math.log10(meanEnergy);
+  const loudnessValues = analyzed.map((track) => track.lufs);
+  const peakEnergy = analyzed.reduce((sum, track) => sum + Math.pow(10, track.truePeak / 10), 0) / analyzed.length;
+  return {
+    count: analyzed.length,
+    averageLufs,
+    spread: Math.max(...loudnessValues) - Math.min(...loudnessValues),
+    averagePeak: 10 * Math.log10(Math.max(1e-12, peakEnergy)),
+    min: Math.min(...loudnessValues),
+    max: Math.max(...loudnessValues),
+  };
+}
+
+function renderMasterStats() {
+  const stats = calculateMasterStats();
+  const analyzedCount = stats?.count || 0;
+  elements.masterAverageLufs.textContent = stats ? formatLufs(stats.averageLufs) : '—';
+  elements.masterLoudnessSpread.textContent = stats ? `${stats.spread.toFixed(1)} LU` : '—';
+  elements.masterSpreadHint.textContent = stats ? `От ${stats.min.toFixed(1)} до ${stats.max.toFixed(1)} LUFS` : 'Разница между самым тихим и громким';
+  elements.masterTrackCount.textContent = `${mastering.tracks.length} / 20`;
+  elements.masterAnalysisState.textContent = mastering.busy ? 'Идёт обработка…' : `${analyzedCount} проанализировано`;
+  elements.masterAveragePeak.textContent = stats ? formatDbtp(stats.averagePeak) : '—';
+  elements.masterCountBadge.textContent = String(mastering.tracks.length);
+  elements.masterClearButton.disabled = !mastering.tracks.length || mastering.busy;
+  elements.masterAllButton.disabled = !mastering.tracks.some((track) => Number.isFinite(track.lufs)) || mastering.busy;
+}
+
+function renderMasterTrackList() {
+  const hasTracks = mastering.tracks.length > 0;
+  elements.masterEmpty.hidden = hasTracks;
+  elements.masterTrackList.hidden = !hasTracks;
+  elements.masterTrackList.innerHTML = '';
+  elements.masterCountBadge.textContent = String(mastering.tracks.length);
+  mastering.tracks.forEach((track) => {
+    const row = document.createElement('div');
+    row.className = 'master-track-row';
+    row.title = track.error || '';
+    const pending = track.status === 'analyzing';
+    const failed = track.status === 'error';
+    const gainDb = Number.isFinite(track.lufs) ? mastering.targetLufs - track.lufs : 0;
+    const wouldLimit = Number.isFinite(track.truePeak) && track.truePeak + gainDb > mastering.truePeakCeiling + 0.05;
+    const resultLabel = Number.isFinite(track.masteredLufs)
+      ? formatLufs(track.masteredLufs)
+      : Number.isFinite(track.lufs) ? (wouldLimit ? 'Пик-контроль' : formatLufs(mastering.targetLufs)) : '—';
+    const resultClass = wouldLimit || (Number.isFinite(track.masteredLufs) && track.masteredLufs < mastering.targetLufs - 0.4) ? 'limited' : '';
+    const gainLabel = Number.isFinite(track.lufs) ? `${gainDb >= 0 ? '+' : '−'}${Math.abs(gainDb).toFixed(1)} dB к исходнику` : '';
+    row.innerHTML = `
+      <div class="master-track-name"><span class="master-track-icon">♫</span><div><strong title="${escapeHtml(track.name)}">${escapeHtml(track.name)}</strong><small>${formatTime(track.duration)} · ${formatBytes(track.size)}${pending ? ' · анализ…' : failed ? ' · ошибка' : ''}</small></div></div>
+      <div class="master-metric"><span>INTEGRATED</span><strong>${Number.isFinite(track.lufs) ? formatLufs(track.lufs) : (pending ? '…' : failed ? 'Ошибка' : '—')}</strong></div>
+      <div class="master-metric"><span>TRUE PEAK</span><strong class="${Number.isFinite(track.truePeak) && track.truePeak > -1 ? 'peak-hot' : ''}">${formatDbtp(track.truePeak)}</strong></div>
+      <div class="master-metric"><span>ПОСЛЕ МАСТЕРИНГА</span><strong class="master-projected ${resultClass}">${resultLabel}</strong><small>${Number.isFinite(track.masteredLufs) ? formatDbtp(track.masteredPeak) : gainLabel}</small></div>
+      <div class="master-row-actions"><button class="master-download" type="button" data-master-download="${track.id}" ${!Number.isFinite(track.lufs) || mastering.busy ? 'disabled' : ''}>Скачать master</button><button class="master-remove" type="button" data-master-remove="${track.id}" aria-label="Удалить трек" ${mastering.busy ? 'disabled' : ''}>×</button></div>`;
+    elements.masterTrackList.appendChild(row);
+  });
+  renderMasterStats();
+}
+
+async function addMasterFiles(fileList) {
+  if (mastering.busy) return;
+  const incoming = Array.from(fileList || []).filter((file) => file.type.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(file.name));
+  if (!incoming.length) { showToast('Выбери аудиофайлы для мастеринга.'); return; }
+  const available = Math.max(0, 20 - mastering.tracks.length);
+  const accepted = incoming.slice(0, available);
+  if (incoming.length > available) showToast(`Лимит — 20 треков. Добавлено ${accepted.length} из ${incoming.length}.`);
+  if (!accepted.length) { showToast('Уже добавлено 20 треков. Удали часть, чтобы добавить новые.'); return; }
+  mastering.busy = true;
+  setMasterControlsDisabled(true);
+  renderMasterTrackList();
+  setMasterProgress(0, 'Подготовка файлов…');
+  try {
+    const ctx = await getAudioContext();
+    for (let index = 0; index < accepted.length; index++) {
+      const file = accepted[index];
+      setMasterProgress((index / accepted.length) * 100, `Читаю файл ${index + 1} из ${accepted.length}: ${file.name}`);
+      try {
+        const data = await file.arrayBuffer();
+        let buffer = await ctx.decodeAudioData(data.slice(0));
+        const item = {
+          id: makeId(), name: file.name, size: file.size, duration: buffer.duration,
+          file, lufs: null, truePeak: null, masteredLufs: null, masteredPeak: null,
+          status: 'analyzing', error: null,
+        };
+        mastering.tracks.push(item);
+        renderMasterTrackList();
+        setMasterProgress(((index + 0.15) / accepted.length) * 100, `Анализирую ${index + 1} из ${accepted.length}: ${file.name}`);
+        try {
+          [item.lufs, item.truePeak] = await Promise.all([
+            analyzeIntegratedLufs(buffer),
+            measureApproxTruePeak(buffer),
+          ]);
+          if (!Number.isFinite(item.lufs)) throw new Error('Слишком тихий файл или цифровая тишина.');
+          item.status = 'ready';
+        } catch (error) {
+          item.status = 'error';
+          item.error = error.message || 'Не удалось измерить громкость.';
+          console.error('Loudness analysis failed:', file.name, error);
+        }
+        renderMasterTrackList();
+        setMasterProgress(((index + 1) / accepted.length) * 100, `Проанализировано ${index + 1} из ${accepted.length}`);
+        // Keep the compressed File, not a decoded multi-minute PCM buffer. This keeps 20-track albums memory-friendly.
+        // The file is decoded again only when its mastered WAV is exported.
+        buffer = null;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      } catch (error) {
+        console.error('Could not decode mastering file:', file.name, error);
+        showToast(`Не удалось открыть: ${file.name}`);
+      }
+    }
+  } catch (error) {
+    console.error(error);
+    showToast(error.message || 'Не удалось запустить аудиоанализ.');
+  } finally {
+    mastering.busy = false;
+    setMasterControlsDisabled(false);
+    hideMasterProgress();
+    renderMasterTrackList();
+    showToast('Анализ альбома завершён.');
+  }
+}
+
+function updateMasterTarget(value) {
+  mastering.targetLufs = Math.max(-20, Math.min(-6, Number(value)));
+  const label = `${mastering.targetLufs < 0 ? '−' : '+'}${Math.abs(mastering.targetLufs).toFixed(1)} LUFS`;
+  elements.masterTargetValue.textContent = label;
+  elements.masterTargetCustomValue.textContent = label;
+  elements.masterTargetSlider.value = String(mastering.targetLufs);
+  document.querySelectorAll('.target-preset').forEach((button) => {
+    button.classList.toggle('active', Math.abs(Number(button.dataset.target) - mastering.targetLufs) < 0.001);
+  });
+  updateSliderFill(elements.masterTargetSlider);
+  mastering.tracks.forEach((track) => { track.masteredLufs = null; track.masteredPeak = null; });
+  renderMasterTrackList();
+}
+
+async function createLimitedMaster(inputBuffer, inputLufs, targetLufs, ceilingDb, onProgress = null) {
+  const OfflineContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const channels = inputBuffer.numberOfChannels;
+  const frames = inputBuffer.length;
+  const sampleRate = inputBuffer.sampleRate;
+  const context = new OfflineContext(channels, frames, sampleRate);
+  const output = context.createBuffer(channels, frames, sampleRate);
+  const inputChannels = Array.from({ length: channels }, (_, channel) => inputBuffer.getChannelData(channel));
+  const outputChannels = Array.from({ length: channels }, (_, channel) => output.getChannelData(channel));
+  const framePeaks = new Float32Array(frames);
+  const chunkSize = 262144;
+  for (let chunkStart = 0; chunkStart < frames; chunkStart += chunkSize) {
+    const chunkEnd = Math.min(frames, chunkStart + chunkSize);
+    for (let frame = chunkStart; frame < chunkEnd; frame++) {
+      let peak = 0;
+      for (let channel = 0; channel < channels; channel++) peak = Math.max(peak, Math.abs(inputChannels[channel][frame]));
+      framePeaks[frame] = peak;
+    }
+    if (onProgress) onProgress(5 + (chunkEnd / frames) * 15);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  const staticGain = masterDbToGain(targetLufs - inputLufs);
+  const ceilingLinear = masterDbToGain(ceilingDb);
+  const lookAhead = Math.max(1, Math.round(sampleRate * 0.005));
+  const releaseSeconds = 0.08;
+  const releaseCoefficient = Math.exp(-1 / (releaseSeconds * sampleRate));
+  const deque = new Int32Array(frames + 1);
+  let head = 0, tail = 0, right = -1, currentLimiterGain = 1;
+
+  for (let chunkStart = 0; chunkStart < frames; chunkStart += chunkSize) {
+    const chunkEnd = Math.min(frames, chunkStart + chunkSize);
+    for (let frame = chunkStart; frame < chunkEnd; frame++) {
+      const end = Math.min(frames - 1, frame + lookAhead);
+      while (right < end) {
+        right++;
+        while (tail > head && framePeaks[deque[tail - 1]] <= framePeaks[right]) tail--;
+        deque[tail++] = right;
+      }
+      while (tail > head && deque[head] < frame) head++;
+      const futurePeak = tail > head ? framePeaks[deque[head]] : framePeaks[frame];
+      const desiredGain = futurePeak > 0 ? Math.min(1, ceilingLinear / (futurePeak * staticGain)) : 1;
+      if (desiredGain < currentLimiterGain) currentLimiterGain = desiredGain;
+      else currentLimiterGain = desiredGain + (currentLimiterGain - desiredGain) * releaseCoefficient;
+      const finalGain = staticGain * currentLimiterGain;
+      for (let channel = 0; channel < channels; channel++) {
+        outputChannels[channel][frame] = Math.max(-1, Math.min(1, inputChannels[channel][frame] * finalGain));
+      }
+    }
+    if (onProgress) onProgress(20 + (chunkEnd / frames) * 45);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  return output;
+}
+
+async function buildMasteredWav(track, targetLufs, ceilingDb, progressCallback = null) {
+  const report = (percent, message) => { if (progressCallback) progressCallback(percent, message); };
+  report(2, `Открываю исходный файл: ${track.name}`);
+  const audioContext = await getAudioContext();
+  let sourceBytes = await track.file.arrayBuffer();
+  let masterInput = await audioContext.decodeAudioData(sourceBytes.slice(0));
+  sourceBytes = null;
+  let mastered = await createLimitedMaster(masterInput, track.lufs, targetLufs, ceilingDb, (percent) => report(percent, `Нормализую и ограничиваю пики: ${track.name}`));
+  masterInput = null;
+  report(70, 'Проверяю итоговую громкость и True Peak…');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  let peak = await measureApproxTruePeak(mastered, (percent) => report(70 + percent * 0.12, 'Измеряю True Peak после обработки…'));
+  if (peak > ceilingDb + 0.05) {
+    const correction = masterDbToGain(ceilingDb - peak - 0.05);
+    for (let channel = 0; channel < mastered.numberOfChannels; channel++) {
+      const data = mastered.getChannelData(channel);
+      for (let index = 0; index < data.length; index++) data[index] *= correction;
+    }
+    peak = await measureApproxTruePeak(mastered);
+  }
+  const finalLufs = await analyzeIntegratedLufs(mastered);
+  report(92, 'Создаю 24-bit WAV…');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const wav = encodeWav(mastered, 24);
+  mastered = null;
+  report(100, 'Готово');
+  return { wav, finalLufs, peak };
+}
+
+async function masterAndDownload(trackId, button) {
+  const track = mastering.tracks.find((item) => item.id === trackId);
+  if (!track || !Number.isFinite(track.lufs) || mastering.busy) return;
+  mastering.busy = true;
+  setMasterControlsDisabled(true);
+  const targetLufs = mastering.targetLufs;
+  const ceilingDb = mastering.truePeakCeiling;
+  button.disabled = true;
+  button.textContent = 'Master…';
+  renderMasterStats();
+  try {
+    const result = await buildMasteredWav(track, targetLufs, ceilingDb, (percent, message) => setMasterProgress(percent, message));
+    const targetTag = `${Math.abs(targetLufs).toFixed(1).replace('.', '-')}-LUFS`;
+    downloadBlob(result.wav, `${cleanAudioName(track.name)}-mastered-${targetTag}.wav`);
+    track.masteredLufs = result.finalLufs;
+    track.masteredPeak = result.peak;
+    showToast(`Готово: ${formatLufs(result.finalLufs)} · ${formatDbtp(result.peak)}`);
+  } catch (error) {
+    console.error('Mastering export failed:', error);
+    showToast(error.message || 'Не удалось подготовить мастер-файл.');
+  } finally {
+    mastering.busy = false;
+    setMasterControlsDisabled(false);
+    hideMasterProgress();
+    renderMasterTrackList();
+  }
+}
+
+async function masterAllAndDownload() {
+  if (mastering.busy) return;
+  const readyTracks = mastering.tracks.filter((track) => Number.isFinite(track.lufs));
+  if (!readyTracks.length) { showToast('Сначала добавь и проанализируй аудиофайлы.'); return; }
+  mastering.busy = true;
+  setMasterControlsDisabled(true);
+  const targetLufs = mastering.targetLufs;
+  const ceilingDb = mastering.truePeakCeiling;
+  renderMasterTrackList();
+  try {
+    for (let index = 0; index < readyTracks.length; index++) {
+      const track = readyTracks[index];
+      const base = (index / readyTracks.length) * 100;
+      setMasterProgress(base, `Мастеринг ${index + 1} из ${readyTracks.length}: ${track.name}`);
+      const result = await buildMasteredWav(track, targetLufs, ceilingDb, (percent, message) => {
+        setMasterProgress(((index + percent / 100) / readyTracks.length) * 100, `${index + 1}/${readyTracks.length} · ${message}`);
+      });
+      const targetTag = `${Math.abs(targetLufs).toFixed(1).replace('.', '-')}-LUFS`;
+      downloadBlob(result.wav, `${cleanAudioName(track.name)}-mastered-${targetTag}.wav`);
+      track.masteredLufs = result.finalLufs;
+      track.masteredPeak = result.peak;
+      renderMasterTrackList();
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    setMasterProgress(100, `Готово: подготовлено ${readyTracks.length} файлов`);
+    showToast(`Альбом обработан: ${readyTracks.length} WAV-файлов. Проверь разрешение браузера на множественные загрузки.`);
+  } catch (error) {
+    console.error('Batch mastering failed:', error);
+    showToast(error.message || 'Не удалось завершить пакетный мастеринг.');
+  } finally {
+    mastering.busy = false;
+    setMasterControlsDisabled(false);
+    hideMasterProgress();
+    renderMasterTrackList();
+  }
+}
+
+function removeMasterTrack(trackId) {
+  if (mastering.busy) return;
+  mastering.tracks = mastering.tracks.filter((track) => track.id !== trackId);
+  renderMasterTrackList();
+}
+
+function clearMasterTracks() {
+  if (mastering.busy) return;
+  mastering.tracks = [];
+  renderMasterTrackList();
+  hideMasterProgress();
+  showToast('Список альбома очищен.');
+}
+
+function wireMasteringEvents() {
+  document.querySelectorAll('[data-view]').forEach((link) => link.addEventListener('click', (event) => {
+    event.preventDefault();
+    switchView(link.dataset.view);
+  }));
+  elements.masterDropzone.addEventListener('click', () => elements.masterFileInput.click());
+  elements.masterFileInput.addEventListener('change', async (event) => {
+    await addMasterFiles(event.target.files);
+    event.target.value = '';
+  });
+  ['dragenter', 'dragover'].forEach((type) => elements.masterDropzone.addEventListener(type, (event) => {
+    event.preventDefault();
+    elements.masterDropzone.classList.add('dragover');
+  }));
+  ['dragleave', 'drop'].forEach((type) => elements.masterDropzone.addEventListener(type, (event) => {
+    event.preventDefault();
+    elements.masterDropzone.classList.remove('dragover');
+  }));
+  elements.masterDropzone.addEventListener('drop', (event) => addMasterFiles(event.dataTransfer.files));
+  elements.masterClearButton.addEventListener('click', clearMasterTracks);
+  elements.masterAllButton.addEventListener('click', masterAllAndDownload);
+  elements.masterTargetSlider.addEventListener('input', () => updateMasterTarget(elements.masterTargetSlider.value));
+  document.querySelectorAll('.target-preset').forEach((button) => button.addEventListener('click', () => updateMasterTarget(button.dataset.target)));
+  elements.truePeakCeiling.addEventListener('change', () => {
+    mastering.truePeakCeiling = Number(elements.truePeakCeiling.value);
+    mastering.tracks.forEach((track) => { track.masteredLufs = null; track.masteredPeak = null; });
+    renderMasterTrackList();
+  });
+  elements.masterTrackList.addEventListener('click', (event) => {
+    const download = event.target.closest('[data-master-download]');
+    const remove = event.target.closest('[data-master-remove]');
+    if (download) masterAndDownload(download.dataset.masterDownload, download);
+    if (remove) removeMasterTrack(remove.dataset.masterRemove);
+  });
+}
+
 function wireEvents() {
   const chooseFiles = () => elements.fileInput.click();
   elements.addFilesButton.addEventListener('click', chooseFiles);
@@ -666,7 +1177,11 @@ function wireEvents() {
   elements.dropzone.addEventListener('drop', async (event) => addFiles(event.dataTransfer.files));
   document.addEventListener('dragover', (event) => event.preventDefault());
   document.addEventListener('drop', (event) => {
-    if (!elements.dropzone.contains(event.target)) { event.preventDefault(); addFiles(event.dataTransfer.files); }
+    if (!elements.dropzone.contains(event.target) && !elements.masterDropzone.contains(event.target)) {
+      event.preventDefault();
+      if (elements.masteringView.contains(event.target)) addMasterFiles(event.dataTransfer.files);
+      else addFiles(event.dataTransfer.files);
+    }
   });
   elements.clearButton.addEventListener('click', () => {
     stopPlayback(true); state.tracks = []; resetEditor(); showToast('Очередь очищена.');
@@ -718,6 +1233,9 @@ function initialize() {
   updatePresetSelection();
   renderTrackList();
   wireEvents();
+  wireMasteringEvents();
+  updateMasterTarget(-14);
+  renderMasterTrackList();
 }
 
 initialize();
