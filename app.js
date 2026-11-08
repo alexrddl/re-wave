@@ -526,6 +526,7 @@ function buildEffectGraph(ctx, sourceNode, channelCount = 2, settings = state) {
   let widthLeft = null;
   let widthRight = null;
   let widthMerger = null;
+  let widthGraphNodes = [];
   if (channelCount >= 2) {
     const splitter = ctx.createChannelSplitter(2);
     const merger = ctx.createChannelMerger(2);
@@ -537,6 +538,7 @@ function buildEffectGraph(ctx, sourceNode, channelCount = 2, settings = state) {
     const sideBus = ctx.createGain();
     widthLeft = ctx.createGain(); widthLeft.gain.value = settings.stereoWidth / 100;
     widthRight = ctx.createGain(); widthRight.gain.value = -settings.stereoWidth / 100;
+    widthGraphNodes = [splitter, merger, leftMid, rightMid, leftSide, rightSide, midBus, sideBus, widthLeft, widthRight];
     chain.connect(splitter);
     splitter.connect(leftMid, 0); splitter.connect(rightMid, 1);
     splitter.connect(leftSide, 0); splitter.connect(rightSide, 1);
@@ -592,7 +594,7 @@ function buildEffectGraph(ctx, sourceNode, channelCount = 2, settings = state) {
     dryGain: dry, wetGain: wet, convolver, delayWet, delayFeedback,
     chorusWet, chorusDepth, fadeGain, masterGain: master,
     effectModulators: [chorusOscillator],
-    effectGraphNodes: [eq, ...eqBands, compressor, saturation, tapeTone, dry, convolver, wet, delay, delayFeedback, delayWet, chorusDelay, chorusWet, chorusOscillator, chorusDepth, fadeGain, master, ...(widthMerger ? [widthMerger] : [])],
+    effectGraphNodes: [eq, ...eqBands, compressor, saturation, tapeTone, dry, convolver, wet, delay, delayFeedback, delayWet, chorusDelay, chorusWet, chorusOscillator, chorusDepth, fadeGain, master, ...widthGraphNodes],
   };
   applyAdvancedGraphSettings(nodes, settings, ctx);
   return nodes;
@@ -676,6 +678,7 @@ function applyFades(buffer, fadeInSeconds = 0, fadeOutSeconds = 0) {
 async function startPlayback(position = state.pausedPosition) {
   const track = getSelectedTrack();
   if (!track) { showToast('Сначала добавь аудиофайл.'); return; }
+  if (state.source || state.effectGraphNodes?.length) stopPlayback(false);
   try {
     const bounds = getTrimBounds(track);
     const boundary = state.reverse ? bounds.end : bounds.start;
@@ -726,10 +729,21 @@ async function startPlayback(position = state.pausedPosition) {
         state.isPlaying = false;
         state.source = null;
         state.stNode = null;
-        state.effectModulators?.forEach((oscillator) => { try { oscillator.stop(); } catch (_) {} });
-        state.effectGraphNodes?.forEach((node) => { try { node.disconnect(); } catch (_) {} });
-        state.effectModulators = [];
-        state.effectGraphNodes = [];
+        graph.effectModulators?.forEach((oscillator) => { try { oscillator.stop(); } catch (_) {} });
+        // Keep the effect tail connected briefly so reverb and delay can decay naturally.
+        const graphNodes = graph.effectGraphNodes || [];
+        setTimeout(() => {
+          graphNodes.forEach((node) => { try { node.disconnect(); } catch (_) {} });
+          if (state.effectGraphNodes === graphNodes) {
+            state.effectGraphNodes = [];
+            state.effectModulators = [];
+            state.eq = null; state.eqBands = null; state.compressor = null;
+            state.saturation = null; state.tapeTone = null; state.widthLeft = null; state.widthRight = null;
+            state.dryGain = null; state.wetGain = null; state.convolver = null;
+            state.delayWet = null; state.chorusWet = null; state.chorusDepth = null;
+            state.fadeGain = null; state.masterGain = null;
+          }
+        }, 3200);
         cancelAnimationFrame(state.raf);
         updatePlayButton(false);
         elements.currentTime.textContent = formatTime(state.pausedPosition);
@@ -1694,12 +1708,17 @@ function updateToolsControls() {
   const track = getSelectedTrack();
   const duration = track?.duration || 0;
   const max = Math.max(.1, duration);
-  state.trimStart = Math.max(0, Math.min(max - .05, Number(state.trimStart) || 0));
-  state.trimEnd = Math.max(state.trimStart + .05, Math.min(max, Number(state.trimEnd ?? max) || max));
+  if (track) {
+    state.trimStart = Math.max(0, Math.min(max - .05, Number(state.trimStart) || 0));
+    state.trimEnd = Math.max(state.trimStart + .05, Math.min(max, Number(state.trimEnd ?? max) || max));
+  } else {
+    state.trimStart = 0;
+    state.trimEnd = 0;
+  }
   elements.trimStartInput.max = String(max);
   elements.trimEndInput.max = String(max);
-  elements.trimStartInput.value = state.trimStart.toFixed(1);
-  elements.trimEndInput.value = state.trimEnd.toFixed(1);
+  elements.trimStartInput.value = track ? state.trimStart.toFixed(1) : '0';
+  elements.trimEndInput.value = track ? state.trimEnd.toFixed(1) : '0';
   elements.trimStartInput.disabled = !track;
   elements.trimEndInput.disabled = !track;
   elements.trimDurationValue.textContent = track ? formatTime(state.trimEnd - state.trimStart) : '—';
@@ -1743,11 +1762,18 @@ function resetAdvancedEffects() {
 
 function resetRemixTools() {
   const track = getSelectedTrack();
+  const wasPlaying = state.isPlaying;
+  if (wasPlaying) stopPlayback(false);
   state.trimStart = 0; state.trimEnd = track?.duration || 0;
   state.fadeIn = 0; state.fadeOut = 0; state.reverse = false;
-  state.pausedPosition = 0; state.reversedBuffer = null;
+  state.pausedPosition = 0;
   updateToolsControls();
-  restartPlaybackAfterToolChange();
+  if (track) {
+    elements.currentTime.textContent = '0:00';
+    elements.miniProgressFill.style.width = '0%';
+    drawWaveform(track.buffer, 0);
+  }
+  if (wasPlaying) startPlayback(0);
 }
 
 function applyTrimInput(which) {
