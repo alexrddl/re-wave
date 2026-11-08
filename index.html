@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=1.4.0">
+  <link rel="stylesheet" href="styles.css?v=1.5.0">
 </head>
 <body>
   <div class="app-shell">
@@ -33,7 +33,7 @@
           <p>Треки не загружаются на сервер. Всё происходит в твоём браузере.</p>
         </div>
         <a class="side-foot" href="https://github.com/" target="_blank" rel="noreferrer">GitHub Pages <span>↗</span></a>
-        <span class="version">RE:WAVE · 1.4</span>
+        <span class="version">RE:WAVE · 1.5</span>
       </div>
     </aside>
 
@@ -109,7 +109,13 @@
             <div class="time-row"><span id="currentTime">0:00</span><span class="time-duration" id="duration">0:00</span></div>
           </section>
 
-          <section class="presets-section">
+          <div class="editor-tab-nav" role="tablist" aria-label="Инструменты редактора">
+  <button class="editor-tab-button active" type="button" role="tab" aria-selected="true" aria-controls="editorTabSound" data-editor-tab="sound"><span>♫</span> Звук</button>
+  <button class="editor-tab-button" type="button" role="tab" aria-selected="false" aria-controls="editorTabEffects" data-editor-tab="effects"><span>✧</span> Эффекты</button>
+  <button class="editor-tab-button" type="button" role="tab" aria-selected="false" aria-controls="editorTabTools" data-editor-tab="tools"><span>⌁</span> Монтаж</button>
+</div>
+<div class="editor-tab-panel active" id="editorTabSound" role="tabpanel">
+<section class="presets-section">
             <div class="section-title-row"><div><span class="eyebrow">ONE-CLICK MAGIC</span><h3>Пресеты</h3></div><span class="section-note">Быстрый старт</span></div>
             <div class="preset-grid">
               <button class="preset-card preset-none active" data-preset="none" type="button" aria-pressed="true">
@@ -186,6 +192,87 @@
             </div>
           </section>
 
+          </div>
+          <section class="editor-tab-panel advanced-tab-panel" id="editorTabEffects" role="tabpanel" hidden>
+            <div class="section-title-row"><div><span class="eyebrow">SHAPE YOUR SOUND</span><h3>Профессиональные эффекты</h3></div><span class="section-note">Ненавязчиво · от простого к точному</span></div>
+            <div class="advanced-effects-grid">
+              <section class="advanced-card eq-card">
+                <div class="advanced-card-heading"><div><strong>Equalizer</strong><small>Настрой баланс частот</small></div><span class="advanced-card-icon">∿</span></div>
+                <div class="eq-control-grid">
+                  <label class="mini-control" for="eqLowSlider"><span>Низ</span><output id="eqLowValue">0 dB</output><input id="eqLowSlider" type="range" min="-12" max="12" value="0" step="1"></label>
+                  <label class="mini-control" for="eqLowMidSlider"><span>Низкая середина</span><output id="eqLowMidValue">0 dB</output><input id="eqLowMidSlider" type="range" min="-12" max="12" value="0" step="1"></label>
+                  <label class="mini-control" for="eqMidSlider"><span>Середина</span><output id="eqMidValue">0 dB</output><input id="eqMidSlider" type="range" min="-12" max="12" value="0" step="1"></label>
+                  <label class="mini-control" for="eqHighMidSlider"><span>Верхняя середина</span><output id="eqHighMidValue">0 dB</output><input id="eqHighMidSlider" type="range" min="-12" max="12" value="0" step="1"></label>
+                  <label class="mini-control" for="eqHighSlider"><span>Верх</span><output id="eqHighValue">0 dB</output><input id="eqHighSlider" type="range" min="-12" max="12" value="0" step="1"></label>
+                </div>
+                <button class="text-reset-button" type="button" id="eqResetButton">Сбросить EQ</button>
+              </section>
+              <section class="advanced-card">
+                <div class="advanced-card-heading"><div><strong>Compressor</strong><small>Мягко контролирует динамику</small></div><span class="advanced-card-icon">▰</span></div>
+                <div class="control-head"><label for="compressorSlider">Интенсивность</label><output id="compressorValue">Off</output></div>
+                <input id="compressorSlider" type="range" min="0" max="100" value="0" step="1">
+                <div class="range-ends"><span>Off</span><span>Сильнее</span></div>
+              </section>
+              <section class="advanced-card">
+                <div class="advanced-card-heading"><div><strong>Stereo Width</strong><small>Ширина стереокартины · для stereo</small></div><span class="advanced-card-icon">◉</span></div>
+                <div class="control-head"><label for="stereoWidthSlider">Ширина</label><output id="stereoWidthValue">100%</output></div>
+                <input id="stereoWidthSlider" type="range" min="0" max="200" value="100" step="1">
+                <div class="range-ends"><span>Mono</span><span>Wide</span></div>
+              </section>
+              <section class="advanced-card">
+                <div class="advanced-card-heading"><div><strong>Saturation</strong><small>Добавляет гармоники и плотность</small></div><span class="advanced-card-icon">≈</span></div>
+                <div class="control-head"><label for="saturationSlider">Насыщенность</label><output id="saturationValue">Off</output></div>
+                <input id="saturationSlider" type="range" min="0" max="100" value="0" step="1">
+                <div class="range-ends"><span>Чисто</span><span>Теплее</span></div>
+              </section>
+              <section class="advanced-card">
+                <div class="advanced-card-heading"><div><strong>Tape warmth</strong><small>Мягкий аналоговый оттенок</small></div><span class="advanced-card-icon">▤</span></div>
+                <div class="control-head"><label for="tapeSlider">Теплота ленты</label><output id="tapeValue">Off</output></div>
+                <input id="tapeSlider" type="range" min="0" max="100" value="0" step="1">
+                <div class="range-ends"><span>Нейтрально</span><span>Винтаж</span></div>
+              </section>
+              <section class="advanced-card">
+                <div class="advanced-card-heading"><div><strong>Delay & Chorus</strong><small>Эхо и лёгкое движение</small></div><span class="advanced-card-icon">〰</span></div>
+                <div class="control-head"><label for="delaySlider">Delay</label><output id="delayValue">Off</output></div>
+                <input id="delaySlider" type="range" min="0" max="100" value="0" step="1">
+                <div class="control-head secondary-control-head"><label for="chorusSlider">Chorus</label><output id="chorusValue">Off</output></div>
+                <input id="chorusSlider" type="range" min="0" max="100" value="0" step="1">
+              </section>
+            </div>
+            <div class="advanced-footer"><span>✦</span> Нулевое значение отключает эффект. Все изменения применяются к предпрослушиванию и экспорту.</div>
+          </section>
+          <section class="editor-tab-panel tools-tab-panel" id="editorTabTools" role="tabpanel" hidden>
+            <div class="section-title-row"><div><span class="eyebrow">EDIT YOUR TRACK</span><h3>Монтаж композиции</h3></div><button class="reset-button" id="resetToolsButton" type="button">Сбросить монтаж ↺</button></div>
+            <section class="advanced-card trim-card">
+              <div class="advanced-card-heading"><div><strong>Trim Audio</strong><small>Оставь нужный фрагмент композиции</small></div><span class="advanced-card-icon">⌁</span></div>
+              <div class="trim-fields">
+                <label class="field-number" for="trimStartInput"><span>Начало · сек.</span><input id="trimStartInput" type="number" min="0" step="0.01" value="0"></label>
+                <span class="trim-separator">—</span>
+                <label class="field-number" for="trimEndInput"><span>Конец · сек.</span><input id="trimEndInput" type="number" min="0.1" step="0.01" value="0"></label>
+                <div class="trim-duration"><small>Длительность фрагмента</small><strong id="trimDurationValue">—</strong></div>
+              </div>
+              <p class="advanced-hint">Можно точно указать границы в секундах. Воспроизведение и экспорт будут учитывать выбранный отрезок.</p>
+            </section>
+            <div class="tools-grid">
+              <section class="advanced-card">
+                <div class="advanced-card-heading"><div><strong>Fade In</strong><small>Плавное появление звука</small></div><span class="advanced-card-icon">↗</span></div>
+                <div class="control-head"><label for="fadeInSlider">Длительность</label><output id="fadeInValue">0.0 s</output></div>
+                <input id="fadeInSlider" type="range" min="0" max="10" value="0" step="0.1">
+                <div class="range-ends"><span>Off</span><span>10 сек.</span></div>
+              </section>
+              <section class="advanced-card">
+                <div class="advanced-card-heading"><div><strong>Fade Out</strong><small>Плавное завершение звука</small></div><span class="advanced-card-icon">↘</span></div>
+                <div class="control-head"><label for="fadeOutSlider">Длительность</label><output id="fadeOutValue">0.0 s</output></div>
+                <input id="fadeOutSlider" type="range" min="0" max="10" value="0" step="0.1">
+                <div class="range-ends"><span>Off</span><span>10 сек.</span></div>
+              </section>
+              <section class="advanced-card reverse-card">
+                <div class="advanced-card-heading"><div><strong>Reverse</strong><small>Воспроизвести фрагмент задом наперёд</small></div><span class="advanced-card-icon">⇄</span></div>
+                <label class="switch-control" for="reverseToggle"><input id="reverseToggle" type="checkbox"><span class="switch-track"></span><span>Обратное воспроизведение</span></label>
+              </section>
+            </div>
+            <div class="advanced-footer"><span>✦</span> Монтаж не изменяет исходный файл. Ты всегда можешь вернуться к оригиналу.</div>
+          </section>
           <div class="export-row">
             <div class="export-copy"><span class="export-icon">↧</span><div><strong>Готово к экспорту?</strong><small>Выбери формат аудио</small></div></div>
             <div class="export-options">
@@ -304,6 +391,6 @@
   </footer>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="app.js?v=1.4.0"></script>
+  <script type="module" src="app.js?v=1.5.0"></script>
 </body>
 </html>

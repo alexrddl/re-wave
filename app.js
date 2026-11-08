@@ -24,6 +24,8 @@ const state = {
   source: null,
   stNode: null,
   eq: null,
+  eqBands: null, compressorNode: null, saturationNode: null, tapeTone: null,
+  widthLeft: null, widthRight: null, delayWet: null, delayFeedback: null, chorusWet: null, chorusDepth: null, fadeGain: null,
   convolver: null,
   dryGain: null,
   wetGain: null,
@@ -39,6 +41,12 @@ const state = {
   reverb: 0,
   bass: 0,
   volume: 100,
+  eqLow: 0, eqLowMid: 0, eqMid: 0, eqHighMid: 0, eqHigh: 0,
+  compressor: 0, stereoWidth: 100, saturation: 0, tape: 0, delay: 0, chorus: 0,
+  trimStart: 0, trimEnd: null, fadeIn: 0, fadeOut: 0, reverse: false,
+  segmentStart: 0, segmentEnd: 0, playbackReverse: false,
+  reversedBuffer: null,
+  effectModulators: [], effectGraphNodes: [],
   raf: null,
   toastTimer: null,
 };
@@ -63,6 +71,19 @@ const elements = {
   speedValue: $('speedValue'), pitchValue: $('pitchValue'), reverbValue: $('reverbValue'),
   bassValue: $('bassValue'), volumeValue: $('volumeValue'), downloadButton: $('downloadButton'),
   statusLine: $('statusLine'), toast: $('toast'),
+  editorTabButtons: Array.from(document.querySelectorAll('[data-editor-tab]')),
+  editorTabPanels: ['sound','effects','tools'].map((name) => $('editorTab' + name[0].toUpperCase() + name.slice(1))),
+  eqLowSlider: $('eqLowSlider'), eqLowMidSlider: $('eqLowMidSlider'), eqMidSlider: $('eqMidSlider'), eqHighMidSlider: $('eqHighMidSlider'), eqHighSlider: $('eqHighSlider'),
+  eqLowValue: $('eqLowValue'), eqLowMidValue: $('eqLowMidValue'), eqMidValue: $('eqMidValue'), eqHighMidValue: $('eqHighMidValue'), eqHighValue: $('eqHighValue'),
+  eqResetButton: $('eqResetButton'),
+  compressorSlider: $('compressorSlider'), compressorValue: $('compressorValue'),
+  stereoWidthSlider: $('stereoWidthSlider'), stereoWidthValue: $('stereoWidthValue'),
+  saturationSlider: $('saturationSlider'), saturationValue: $('saturationValue'),
+  tapeSlider: $('tapeSlider'), tapeValue: $('tapeValue'),
+  delaySlider: $('delaySlider'), delayValue: $('delayValue'), chorusSlider: $('chorusSlider'), chorusValue: $('chorusValue'),
+  trimStartInput: $('trimStartInput'), trimEndInput: $('trimEndInput'), trimDurationValue: $('trimDurationValue'),
+  fadeInSlider: $('fadeInSlider'), fadeInValue: $('fadeInValue'), fadeOutSlider: $('fadeOutSlider'), fadeOutValue: $('fadeOutValue'),
+  reverseToggle: $('reverseToggle'), resetToolsButton: $('resetToolsButton'),
   exportFormat: $('exportFormat'), mp3Bitrate: $('mp3Bitrate'), mp3BitrateWrap: $('mp3BitrateWrap'),
   masterExportFormat: $('masterExportFormat'), masterMp3Bitrate: $('masterMp3Bitrate'), masterMp3BitrateWrap: $('masterMp3BitrateWrap'),
   remixView: $('remixView'), masteringView: $('masteringView'), remixActions: $('remixActions'),
@@ -175,6 +196,7 @@ function applySettings(settings, announce = true, presetKey = null) {
   if (state.dryGain) state.dryGain.gain.setTargetAtTime(1 - (state.reverb / 100) * 0.24, state.audioContext.currentTime, 0.025);
   if (state.wetGain) state.wetGain.gain.setTargetAtTime((state.reverb / 100) * 0.72, state.audioContext.currentTime, 0.025);
   if (state.masterGain) state.masterGain.gain.setTargetAtTime(state.volume / 100, state.audioContext.currentTime, 0.025);
+  if (state.audioContext) applyAdvancedGraphSettings(state, state, state.audioContext);
   if (announce) setStatus('Настройки обновлены. Можешь слушать или скачать результат.');
 }
 
@@ -250,17 +272,25 @@ function selectTrack(id) {
   if (!track) return;
   stopPlayback(true);
   state.selectedId = id;
+  state.trimStart = 0;
+  state.trimEnd = track.duration;
+  state.fadeIn = 0;
+  state.fadeOut = 0;
+  state.reverse = false;
   state.pausedPosition = 0;
+  state.reversedBuffer = null;
+  resetAdvancedEffects();
   elements.currentTrackName.textContent = track.name;
   elements.currentTrackInfo.textContent = `${formatTime(track.duration)} · ${formatBytes(track.size)} · ${track.buffer.numberOfChannels} ch`;
   elements.playerTrackName.textContent = track.name;
   elements.playerTrackMeta.textContent = `${formatTime(track.duration)} · ${track.buffer.sampleRate.toLocaleString('ru-RU')} Hz`;
   elements.duration.textContent = formatTime(track.duration);
-  elements.currentTime.textContent = '0:00';
+  elements.currentTime.textContent = formatTime(state.pausedPosition);
   elements.downloadButton.disabled = false;
   elements.wavePlaceholder.style.display = 'none';
   renderTrackList();
-  drawWaveform(track.buffer, 0);
+  drawWaveform(track.buffer, state.pausedPosition / track.duration);
+  updateToolsControls();
   applySettings(PRESETS.none, false, 'none');
   setStatus('Трек готов. Выбери пресет или настрой эффекты вручную.');
 }
@@ -281,6 +311,11 @@ function removeTrack(id) {
 
 function resetEditor() {
   state.selectedId = null;
+  state.trimStart = 0; state.trimEnd = 0;
+  state.fadeIn = 0; state.fadeOut = 0; state.reverse = false;
+  state.pausedPosition = 0; state.reversedBuffer = null;
+  resetAdvancedEffects();
+  updateToolsControls();
   elements.currentTrackName.textContent = 'Выбери свой первый трек';
   elements.currentTrackInfo.textContent = 'Твой следующий любимый звук начинается здесь';
   elements.playerTrackName.textContent = 'Ничего не играет';
@@ -347,30 +382,39 @@ function roundRect(ctx, x, y, w, h, r) {
 function getCurrentPosition() {
   const track = getSelectedTrack();
   if (!track) return 0;
+  const bounds = getTrimBounds(track);
   if (state.isPlaying && state.audioContext) {
     const elapsed = Math.max(0, state.audioContext.currentTime - state.startedAt);
     const effectiveRate = state.usingFallback ? state.speed * state.pitch : state.speed;
-    return Math.min(track.duration, state.offsetAtStart + elapsed * effectiveRate);
+    const raw = state.playbackReverse
+      ? state.offsetAtStart - elapsed * effectiveRate
+      : state.offsetAtStart + elapsed * effectiveRate;
+    return Math.max(bounds.start, Math.min(bounds.end, raw));
   }
-  return Math.min(track.duration, state.pausedPosition);
+  return Math.max(bounds.start, Math.min(bounds.end, state.pausedPosition));
 }
 
 function updateProgress() {
   const track = getSelectedTrack();
   if (!track) return;
   const position = getCurrentPosition();
+  const bounds = getTrimBounds(track);
   const ratio = track.duration ? position / track.duration : 0;
   elements.currentTime.textContent = formatTime(position);
   elements.miniProgressFill.style.width = `${ratio * 100}%`;
   drawWaveform(track.buffer, ratio);
-  if (state.isPlaying && position >= track.duration) {
+  const finished = state.playbackReverse ? position <= bounds.start + .015 : position >= bounds.end - .015;
+  if (state.isPlaying && finished) {
+    const restartPosition = state.playbackReverse ? bounds.end : bounds.start;
     if (state.isLooping) {
-      startPlayback(0);
+      startPlayback(restartPosition);
     } else {
-      state.pausedPosition = 0;
-      stopPlayback(false);
-      elements.currentTime.textContent = '0:00';
-      drawWaveform(track.buffer, 0);
+      const endPosition = bounds.start;
+      state.pausedPosition = endPosition;
+      // Let the source finish naturally; its onended handler keeps the reverb/delay tail alive.
+      elements.currentTime.textContent = formatTime(endPosition);
+      elements.miniProgressFill.style.width = `${(endPosition / track.duration) * 100}%`;
+      drawWaveform(track.buffer, endPosition / track.duration);
     }
     return;
   }
@@ -419,36 +463,251 @@ function createImpulse(context, seconds = 2.8, decay = 2.25) {
   return impulse;
 }
 
-function buildEffectGraph(ctx, sourceNode, useSoundTouch = false) {
-  // A low-shelf only lifts/cuts the low band. No broadband compressor follows it,
-  // so boosted bass cannot trigger gain reduction across the entire mix.
+function makeSaturationCurve(amount = 0, tape = 0) {
+  const size = 2048;
+  const curve = new Float32Array(size);
+  const blend = Math.max(0, Math.min(1, amount / 100 * .72 + tape / 100 * .18));
+  const drive = 1 + amount / 18 + tape / 12;
+  const normalization = Math.tanh(drive);
+  for (let index = 0; index < size; index++) {
+    const x = index * 2 / (size - 1) - 1;
+    const shaped = Math.tanh(x * drive) / normalization;
+    curve[index] = x * (1 - blend) + shaped * blend;
+  }
+  return curve;
+}
+
+function applyAdvancedGraphSettings(nodes, settings, ctx) {
+  if (!nodes) return;
+  const bands = [settings.eqLow, settings.eqLowMid, settings.eqMid, settings.eqHighMid, settings.eqHigh];
+  nodes.eqBands?.forEach((filter, index) => { filter.gain.setTargetAtTime(bands[index], ctx.currentTime, .025); });
+  const compression = settings.compressor / 100;
+  if (nodes.compressorNode) {
+    nodes.compressorNode.threshold.setTargetAtTime(settings.compressor ? -6 - compression * 24 : 0, ctx.currentTime, .025);
+    nodes.compressorNode.ratio.setTargetAtTime(settings.compressor ? 1 + compression * 5.5 : 1, ctx.currentTime, .025);
+    nodes.compressorNode.knee.setTargetAtTime(12, ctx.currentTime, .025);
+  }
+  if (nodes.saturationNode) nodes.saturationNode.curve = makeSaturationCurve(settings.saturation, settings.tape);
+  if (nodes.tapeTone) nodes.tapeTone.gain.setTargetAtTime(-settings.tape * .028, ctx.currentTime, .025);
+  if (nodes.widthLeft) nodes.widthLeft.gain.setTargetAtTime(settings.stereoWidth / 100, ctx.currentTime, .025);
+  if (nodes.widthRight) nodes.widthRight.gain.setTargetAtTime(-settings.stereoWidth / 100, ctx.currentTime, .025);
+  if (nodes.delayWet) nodes.delayWet.gain.setTargetAtTime(settings.delay / 100 * .34, ctx.currentTime, .025);
+  if (nodes.chorusWet) nodes.chorusWet.gain.setTargetAtTime(settings.chorus / 100 * .28, ctx.currentTime, .025);
+  if (nodes.chorusDepth) nodes.chorusDepth.gain.setTargetAtTime(settings.chorus / 100 * .0035, ctx.currentTime, .025);
+}
+
+function buildEffectGraph(ctx, sourceNode, channelCount = 2, settings = state) {
   const eq = ctx.createBiquadFilter();
   eq.type = 'lowshelf';
   eq.frequency.value = 120;
-  eq.gain.value = state.bass;
+  eq.gain.value = settings.bass;
+
+  const eqSpecs = [
+    { type: 'lowshelf', frequency: 140, q: 0.7 },
+    { type: 'peaking', frequency: 280, q: 0.85 },
+    { type: 'peaking', frequency: 1100, q: 0.85 },
+    { type: 'peaking', frequency: 4200, q: 0.85 },
+    { type: 'highshelf', frequency: 10500, q: 0.7 },
+  ];
+  const eqBands = eqSpecs.map((spec, index) => {
+    const filter = ctx.createBiquadFilter();
+    filter.type = spec.type;
+    filter.frequency.value = spec.frequency;
+    filter.Q.value = spec.q;
+    filter.gain.value = [settings.eqLow, settings.eqLowMid, settings.eqMid, settings.eqHighMid, settings.eqHigh][index];
+    return filter;
+  });
+
+  let chain = eq;
+  sourceNode.connect(eq);
+  eqBands.forEach((filter) => { chain.connect(filter); chain = filter; });
+
+  const compressor = ctx.createDynamicsCompressor();
+  const saturation = ctx.createWaveShaper();
+  saturation.oversample = '2x';
+  saturation.curve = makeSaturationCurve(settings.saturation, settings.tape);
+  const tapeTone = ctx.createBiquadFilter();
+  tapeTone.type = 'highshelf';
+  tapeTone.frequency.value = 10500;
+  tapeTone.gain.value = -settings.tape * .028;
+  chain.connect(compressor);
+  compressor.connect(saturation);
+  saturation.connect(tapeTone);
+  chain = tapeTone;
+
+  let widthLeft = null;
+  let widthRight = null;
+  let widthMerger = null;
+  let widthGraphNodes = [];
+  if (channelCount >= 2) {
+    const splitter = ctx.createChannelSplitter(2);
+    const merger = ctx.createChannelMerger(2);
+    const leftMid = ctx.createGain(); leftMid.gain.value = .5;
+    const rightMid = ctx.createGain(); rightMid.gain.value = .5;
+    const leftSide = ctx.createGain(); leftSide.gain.value = .5;
+    const rightSide = ctx.createGain(); rightSide.gain.value = -.5;
+    const midBus = ctx.createGain();
+    const sideBus = ctx.createGain();
+    widthLeft = ctx.createGain(); widthLeft.gain.value = settings.stereoWidth / 100;
+    widthRight = ctx.createGain(); widthRight.gain.value = -settings.stereoWidth / 100;
+    widthGraphNodes = [splitter, merger, leftMid, rightMid, leftSide, rightSide, midBus, sideBus, widthLeft, widthRight];
+    chain.connect(splitter);
+    splitter.connect(leftMid, 0); splitter.connect(rightMid, 1);
+    splitter.connect(leftSide, 0); splitter.connect(rightSide, 1);
+    leftMid.connect(midBus); rightMid.connect(midBus);
+    leftSide.connect(sideBus); rightSide.connect(sideBus);
+    midBus.connect(merger, 0, 0); midBus.connect(merger, 0, 1);
+    sideBus.connect(widthLeft); sideBus.connect(widthRight);
+    widthLeft.connect(merger, 0, 0); widthRight.connect(merger, 0, 1);
+    chain = merger;
+    widthMerger = merger;
+  }
+
   const dry = ctx.createGain();
+  dry.gain.value = 1 - settings.reverb / 100 * .24;
   const convolver = ctx.createConvolver();
   convolver.buffer = createImpulse(ctx);
   const wet = ctx.createGain();
+  wet.gain.value = settings.reverb / 100 * .72;
+  const delay = ctx.createDelay(1.5);
+  delay.delayTime.value = .28;
+  const delayFeedback = ctx.createGain();
+  delayFeedback.gain.value = .2;
+  const delayWet = ctx.createGain();
+  delayWet.gain.value = settings.delay / 100 * .34;
+  const chorusDelay = ctx.createDelay(.05);
+  chorusDelay.delayTime.value = .022;
+  const chorusWet = ctx.createGain();
+  chorusWet.gain.value = settings.chorus / 100 * .28;
+  const chorusOscillator = ctx.createOscillator();
+  chorusOscillator.type = 'sine';
+  chorusOscillator.frequency.value = .32;
+  const chorusDepth = ctx.createGain();
+  chorusDepth.gain.value = settings.chorus / 100 * .0035;
+  chorusOscillator.connect(chorusDepth);
+  chorusDepth.connect(chorusDelay.delayTime);
+  chorusOscillator.start();
+
+  const fadeGain = ctx.createGain();
+  fadeGain.gain.value = 1;
   const master = ctx.createGain();
-  dry.gain.value = 1 - state.reverb / 100 * .24;
-  wet.gain.value = state.reverb / 100 * .72;
-  master.gain.value = state.volume / 100;
-  sourceNode.connect(eq);
-  eq.connect(dry); dry.connect(master);
-  eq.connect(convolver); convolver.connect(wet); wet.connect(master);
+  master.gain.value = settings.volume / 100;
+
+  chain.connect(dry); dry.connect(fadeGain);
+  chain.connect(convolver); convolver.connect(wet); wet.connect(fadeGain);
+  chain.connect(delay); delay.connect(delayFeedback); delayFeedback.connect(delay);
+  delay.connect(delayWet); delayWet.connect(fadeGain);
+  chain.connect(chorusDelay); chorusDelay.connect(chorusWet); chorusWet.connect(fadeGain);
+  fadeGain.connect(master);
   master.connect(ctx.destination);
-  return { eq, dryGain: dry, wetGain: wet, convolver, masterGain: master };
+
+  const nodes = {
+    eq, eqBands, compressorNode: compressor, saturationNode: saturation, tapeTone, widthLeft, widthRight, widthMerger,
+    dryGain: dry, wetGain: wet, convolver, delayWet, delayFeedback,
+    chorusWet, chorusDepth, fadeGain, masterGain: master,
+    effectModulators: [chorusOscillator],
+    effectGraphNodes: [eq, ...eqBands, compressor, saturation, tapeTone, dry, convolver, wet, delay, delayFeedback, delayWet, chorusDelay, chorusWet, chorusOscillator, chorusDepth, fadeGain, master, ...widthGraphNodes],
+  };
+  applyAdvancedGraphSettings(nodes, settings, ctx);
+  return nodes;
+}
+
+function schedulePlaybackFades(fadeGain, ctx, segmentDuration, effectiveRate, startsAtBoundary = true) {
+  if (!fadeGain) return;
+  const now = ctx.currentTime;
+  const playbackDuration = segmentDuration / Math.max(.05, effectiveRate);
+  const fadeIn = startsAtBoundary ? Math.min(state.fadeIn, playbackDuration / 2) / Math.max(.05, effectiveRate) : 0;
+  const fadeOut = Math.min(state.fadeOut, playbackDuration / 2) / Math.max(.05, effectiveRate);
+  fadeGain.gain.cancelScheduledValues(now);
+  fadeGain.gain.setValueAtTime(fadeIn > 0 ? 0 : 1, now);
+  if (fadeIn > 0) fadeGain.gain.linearRampToValueAtTime(1, now + fadeIn);
+  if (fadeOut > 0) {
+    const fadeStart = Math.max(now + fadeIn, now + playbackDuration - fadeOut);
+    fadeGain.gain.setValueAtTime(1, fadeStart);
+    fadeGain.gain.linearRampToValueAtTime(0, now + playbackDuration);
+  }
+}
+
+function getTrimBounds(track = getSelectedTrack()) {
+  if (!track) return { start: 0, end: 0 };
+  const start = Math.max(0, Math.min(track.duration, Number(state.trimStart) || 0));
+  const end = Math.max(start + .05, Math.min(track.duration, Number(state.trimEnd ?? track.duration) || track.duration));
+  return { start: Math.min(start, track.duration - .05), end: Math.max(start + .05, end) };
+}
+
+function reverseAudioBuffer(buffer) {
+  const reversed = new AudioBuffer({ length: buffer.length, numberOfChannels: buffer.numberOfChannels, sampleRate: buffer.sampleRate });
+  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+    const source = buffer.getChannelData(channel);
+    const target = reversed.getChannelData(channel);
+    for (let index = 0, end = source.length - 1; index < source.length; index++, end--) target[index] = source[end];
+  }
+  return reversed;
+}
+
+function getPlaybackBuffer(track) {
+  if (!state.reverse) return track.buffer;
+  if (!track.reversedBuffer) track.reversedBuffer = reverseAudioBuffer(track.buffer);
+  return track.reversedBuffer;
+}
+
+function sliceAudioBuffer(buffer, startSeconds, endSeconds) {
+  const start = Math.max(0, Math.min(buffer.length - 1, Math.floor(startSeconds * buffer.sampleRate)));
+  const end = Math.max(start + 1, Math.min(buffer.length, Math.floor(endSeconds * buffer.sampleRate)));
+  const output = new AudioBuffer({ length: end - start, numberOfChannels: buffer.numberOfChannels, sampleRate: buffer.sampleRate });
+  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+    output.getChannelData(channel).set(buffer.getChannelData(channel).subarray(start, end));
+  }
+  return output;
+}
+
+function trimAndReverseBuffer(buffer, originalDuration, settings = state) {
+  const startBound = Math.max(0, Math.min(originalDuration, settings.trimStart || 0));
+  const endBound = Math.max(startBound + .05, Math.min(originalDuration, settings.trimEnd ?? originalDuration));
+  const timeScale = buffer.duration / originalDuration;
+  const cropped = sliceAudioBuffer(buffer, startBound * timeScale, endBound * timeScale);
+  return settings.reverse ? reverseAudioBuffer(cropped) : cropped;
+}
+
+function applyFades(buffer, fadeInSeconds = 0, fadeOutSeconds = 0) {
+  const output = new AudioBuffer({ length: buffer.length, numberOfChannels: buffer.numberOfChannels, sampleRate: buffer.sampleRate });
+  const fadeInFrames = Math.min(Math.floor(fadeInSeconds * buffer.sampleRate), Math.floor(buffer.length / 2));
+  const fadeOutFrames = Math.min(Math.floor(fadeOutSeconds * buffer.sampleRate), Math.floor(buffer.length / 2));
+  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+    const source = buffer.getChannelData(channel);
+    const target = output.getChannelData(channel);
+    for (let index = 0; index < buffer.length; index++) {
+      let gain = 1;
+      if (fadeInFrames > 0 && index < fadeInFrames) gain = Math.min(gain, index / fadeInFrames);
+      const fromEnd = buffer.length - 1 - index;
+      if (fadeOutFrames > 0 && fromEnd < fadeOutFrames) gain = Math.min(gain, fromEnd / fadeOutFrames);
+      target[index] = source[index] * gain;
+    }
+  }
+  return output;
 }
 
 async function startPlayback(position = state.pausedPosition) {
   const track = getSelectedTrack();
   if (!track) { showToast('Сначала добавь аудиофайл.'); return; }
+  if (state.source || state.effectGraphNodes?.length) stopPlayback(false);
   try {
+    const bounds = getTrimBounds(track);
+    const boundary = state.reverse ? bounds.end : bounds.start;
+    let startPosition = Number.isFinite(position) ? position : boundary;
+    if (state.reverse) {
+      if (startPosition <= bounds.start + .01) startPosition = bounds.end;
+      startPosition = Math.max(bounds.start, Math.min(bounds.end, startPosition));
+    } else {
+      if (startPosition >= bounds.end - .01) startPosition = bounds.start;
+      startPosition = Math.max(bounds.start, Math.min(bounds.end, startPosition));
+    }
+    const sourceOffset = state.reverse ? Math.max(0, track.duration - startPosition) : startPosition;
+    const sourceDuration = state.reverse ? Math.max(.05, startPosition - bounds.start) : Math.max(.05, bounds.end - startPosition);
     const ctx = await getAudioContext();
     const hasWorklet = await loadSoundTouch(ctx);
     const source = ctx.createBufferSource();
-    source.buffer = track.buffer;
+    source.buffer = getPlaybackBuffer(track);
     source.playbackRate.value = state.speed;
     state.usingFallback = !hasWorklet;
     let inputNode = source;
@@ -460,39 +719,57 @@ async function startPlayback(position = state.pausedPosition) {
       stNode.pitchSemitones.value = pitchRatioToSemitones(state.pitch);
       inputNode = stNode;
     } else {
-      // Fallback: native playback rate changes both tempo and pitch together.
       source.playbackRate.value = state.speed * state.pitch;
     }
-    const graph = buildEffectGraph(ctx, inputNode);
+    const graph = buildEffectGraph(ctx, inputNode, track.buffer.numberOfChannels, state);
     state.source = source;
     state.stNode = stNode;
-    Object.assign(state, graph);
-    state.offsetAtStart = Math.max(0, Math.min(position, track.duration));
+    state.segmentStart = bounds.start;
+    state.segmentEnd = bounds.end;
+    state.playbackReverse = state.reverse;
+    state.offsetAtStart = startPosition;
     state.startedAt = ctx.currentTime;
-    state.pausedPosition = state.offsetAtStart;
+    state.pausedPosition = startPosition;
     state.isPlaying = true;
+    Object.assign(state, graph);
+    const effectiveRate = state.usingFallback ? state.speed * state.pitch : state.speed;
+    schedulePlaybackFades(graph.fadeGain, ctx, sourceDuration, effectiveRate,
+      state.reverse ? startPosition >= bounds.end - .01 : startPosition <= bounds.start + .01);
     source.onended = () => {
       if (state.source === source && state.isPlaying && !state.isLooping) {
+        state.pausedPosition = state.segmentStart;
         state.isPlaying = false;
-        state.pausedPosition = 0;
         state.source = null;
         state.stNode = null;
+        graph.effectModulators?.forEach((oscillator) => { try { oscillator.stop(); } catch (_) {} });
+        // Keep the effect tail connected briefly so reverb and delay can decay naturally.
+        const graphNodes = graph.effectGraphNodes || [];
+        setTimeout(() => {
+          graphNodes.forEach((node) => { try { node.disconnect(); } catch (_) {} });
+          if (state.effectGraphNodes === graphNodes) {
+            state.effectGraphNodes = [];
+            state.effectModulators = [];
+            state.eq = null; state.eqBands = null; state.compressorNode = null;
+            state.saturationNode = null; state.tapeTone = null; state.widthLeft = null; state.widthRight = null;
+            state.dryGain = null; state.wetGain = null; state.convolver = null;
+            state.delayWet = null; state.chorusWet = null; state.chorusDepth = null;
+            state.fadeGain = null; state.masterGain = null;
+          }
+        }, 3200);
         cancelAnimationFrame(state.raf);
         updatePlayButton(false);
-        elements.currentTime.textContent = '0:00';
-        elements.miniProgressFill.style.width = '0%';
-        drawWaveform(track.buffer, 0);
+        elements.currentTime.textContent = formatTime(state.pausedPosition);
+        elements.miniProgressFill.style.width = `${(state.pausedPosition / track.duration) * 100}%`;
+        drawWaveform(track.buffer, state.pausedPosition / track.duration);
       }
     };
-    source.start(0, state.offsetAtStart);
+    source.start(0, sourceOffset, sourceDuration);
     updatePlayButton(true);
     cancelAnimationFrame(state.raf);
     state.raf = requestAnimationFrame(updateProgress);
-    if (!hasWorklet) {
-      setStatus('Запасной режим: Speed и Pitch связаны. Для независимой обработки проверь подключение к CDN.', 'error');
-    } else {
-      setStatus('Воспроизведение с независимыми Speed и Pitch.', 'success');
-    }
+    setStatus(!hasWorklet
+      ? 'Запасной режим: Speed и Pitch связаны. Остальные эффекты доступны.'
+      : 'Воспроизведение с эффектами и независимыми Speed / Pitch.', hasWorklet ? 'success' : 'error');
   } catch (error) {
     console.error(error);
     setStatus(error.message || 'Не удалось запустить воспроизведение.', 'error');
@@ -513,8 +790,17 @@ function stopPlayback(keepPosition = true) {
   if (state.stNode) {
     try { state.stNode.disconnect(); } catch (_) { /* already disconnected */ }
   }
+  state.effectModulators?.forEach((oscillator) => { try { oscillator.stop(); } catch (_) {} });
+  state.effectGraphNodes?.forEach((node) => { try { node.disconnect(); } catch (_) {} });
   state.source = null;
   state.stNode = null;
+  state.effectModulators = [];
+  state.effectGraphNodes = [];
+  state.eq = null; state.eqBands = null; state.compressorNode = null;
+  state.saturationNode = null; state.tapeTone = null; state.widthLeft = null; state.widthRight = null;
+  state.dryGain = null; state.wetGain = null; state.convolver = null;
+  state.delayWet = null; state.chorusWet = null; state.chorusDepth = null;
+  state.fadeGain = null; state.masterGain = null;
   updatePlayButton(false);
 }
 
@@ -524,38 +810,47 @@ function updatePlayButton(playing) {
   elements.playButton.title = playing ? 'Пауза' : 'Воспроизвести';
 }
 
+
 async function togglePlayback() {
-  if (!getSelectedTrack()) { showToast('Сначала добавь трек в очередь.'); return; }
+  const track = getSelectedTrack();
+  if (!track) { showToast('Сначала добавь трек в очередь.'); return; }
   if (state.isPlaying) {
     stopPlayback(true);
     setStatus('Пауза. Нажми Play, чтобы продолжить.');
   } else {
-    const track = getSelectedTrack();
-    const position = state.pausedPosition >= track.duration ? 0 : state.pausedPosition;
+    const bounds = getTrimBounds(track);
+    let position = state.pausedPosition;
+    if (state.reverse ? position <= bounds.start + .01 : position >= bounds.end - .01) position = state.reverse ? bounds.end : bounds.start;
     await startPlayback(position);
   }
 }
 
+
 function seekTo(ratio) {
   const track = getSelectedTrack();
   if (!track) return;
-  const position = Math.max(0, Math.min(1, ratio)) * track.duration;
+  const bounds = getTrimBounds(track);
+  const raw = Math.max(0, Math.min(1, ratio)) * track.duration;
+  const position = Math.max(bounds.start, Math.min(bounds.end, raw));
   const wasPlaying = state.isPlaying;
   if (wasPlaying) stopPlayback(false);
   state.pausedPosition = position;
   elements.currentTime.textContent = formatTime(position);
-  elements.miniProgressFill.style.width = `${ratio * 100}%`;
-  drawWaveform(track.buffer, ratio);
+  elements.miniProgressFill.style.width = `${(position / track.duration) * 100}%`;
+  drawWaveform(track.buffer, position / track.duration);
   if (wasPlaying) startPlayback(position);
 }
+
 
 function changeTrack(direction) {
   if (!state.tracks.length) return;
   const index = state.tracks.findIndex((track) => track.id === state.selectedId);
   const next = (index + direction + state.tracks.length) % state.tracks.length;
   selectTrack(state.tracks[next].id);
-  startPlayback(0);
+  const nextTrack = getSelectedTrack();
+  startPlayback(state.reverse ? nextTrack.duration : 0);
 }
+
 
 function drawProgressAfterResize() {
   const track = getSelectedTrack();
@@ -768,21 +1063,16 @@ function encodeWav(buffer, bitDepth = 16) {
 async function renderEffects(inputBuffer, settings) {
   const OfflineContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
   if (!OfflineContext) throw new Error('OfflineAudioContext не поддерживается этим браузером.');
-  const tailSeconds = settings.reverb > 0 ? 2.8 : 0;
-  const length = inputBuffer.length + Math.ceil(inputBuffer.sampleRate * tailSeconds);
+  const effectTail = Math.max(settings.reverb > 0 ? 2.8 : 0, settings.delay > 0 ? 1.8 : 0);
+  const length = inputBuffer.length + Math.ceil(inputBuffer.sampleRate * effectTail);
   const ctx = new OfflineContext(inputBuffer.numberOfChannels, length, inputBuffer.sampleRate);
   const source = ctx.createBufferSource();
   source.buffer = inputBuffer;
-  const eq = ctx.createBiquadFilter(); eq.type = 'lowshelf'; eq.frequency.value = 120; eq.gain.value = settings.bass;
-  const dry = ctx.createGain(); dry.gain.value = 1 - settings.reverb / 100 * .24;
-  const convolver = ctx.createConvolver(); convolver.buffer = createImpulse(ctx);
-  const wet = ctx.createGain(); wet.gain.value = settings.reverb / 100 * .72;
-  const master = ctx.createGain(); master.gain.value = settings.volume / 100;
-  source.connect(eq); eq.connect(dry); dry.connect(master); eq.connect(convolver); convolver.connect(wet); wet.connect(master);
-  master.connect(ctx.destination);
+  buildEffectGraph(ctx, source, inputBuffer.numberOfChannels, settings);
   source.start(0);
   return ctx.startRendering();
 }
+
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -826,8 +1116,11 @@ async function exportTrack() {
         processed = await ctx.startRendering();
       }
     }
-    setStatus('Применяю Reverb, Bass и Volume…');
-    const rendered = await renderEffects(processed, state);
+    setStatus('Применяю монтаж: Trim, Reverse и Fade…');
+    const edited = trimAndReverseBuffer(processed, track.duration, state);
+    setStatus('Применяю EQ, компрессию и пространственные эффекты…');
+    const effected = await renderEffects(edited, state);
+    const rendered = applyFades(effected, state.fadeIn, state.fadeOut);
     const format = selectedFormat(elements.exportFormat);
     const bitrate = selectedBitrate(elements.mp3Bitrate);
     let output;
@@ -848,13 +1141,12 @@ async function exportTrack() {
   } catch (error) {
     console.error('Export failed:', error);
     setStatus(error.message || 'Не удалось экспортировать файл.', 'error');
-    showToast('Ошибка экспорта. Попробуй трек меньшего размера.');
+    showToast(error.message || 'Ошибка экспорта. Проверь настройки и попробуй снова.');
   } finally {
     button.disabled = !getSelectedTrack();
     buttonLabel.textContent = 'Скачать ' + selectedFormat(elements.exportFormat).toUpperCase();
   }
 }
-
 
 function switchView(view) {
   // Normalize the queue shortcut to the editor view, but keep its scroll behavior.
@@ -1395,7 +1687,154 @@ function wireMasteringEvents() {
   });
 }
 
+function switchEditorTab(tabName) {
+  elements.editorTabButtons.forEach((button) => {
+    const active = button.dataset.editorTab === tabName;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  elements.editorTabPanels.forEach((panel) => {
+    const active = panel.id === 'editorTab' + tabName[0].toUpperCase() + tabName.slice(1);
+    panel.hidden = !active;
+    panel.classList.toggle('active', active);
+  });
+}
+
+function updateAdvancedLabels() {
+  const items = [
+    ['eqLowValue', state.eqLow, ' dB'], ['eqLowMidValue', state.eqLowMid, ' dB'],
+    ['eqMidValue', state.eqMid, ' dB'], ['eqHighMidValue', state.eqHighMid, ' dB'], ['eqHighValue', state.eqHigh, ' dB'],
+  ];
+  items.forEach(([id, value, suffix]) => { $(id).textContent = `${value > 0 ? '+' : ''}${value}${suffix}`; });
+  elements.compressorValue.textContent = state.compressor ? `${state.compressor}%` : 'Off';
+  elements.stereoWidthValue.textContent = `${state.stereoWidth}%`;
+  elements.saturationValue.textContent = state.saturation ? `${state.saturation}%` : 'Off';
+  elements.tapeValue.textContent = state.tape ? `${state.tape}%` : 'Off';
+  elements.delayValue.textContent = state.delay ? `${state.delay}%` : 'Off';
+  elements.chorusValue.textContent = state.chorus ? `${state.chorus}%` : 'Off';
+  [elements.eqLowSlider, elements.eqLowMidSlider, elements.eqMidSlider, elements.eqHighMidSlider, elements.eqHighSlider,
+    elements.compressorSlider, elements.stereoWidthSlider, elements.saturationSlider, elements.tapeSlider, elements.delaySlider, elements.chorusSlider].forEach(updateSliderFill);
+}
+
+function updateToolsControls() {
+  const track = getSelectedTrack();
+  const duration = track?.duration || 0;
+  const max = Math.max(.1, duration);
+  if (track) {
+    state.trimStart = Math.max(0, Math.min(max - .05, Number(state.trimStart) || 0));
+    state.trimEnd = Math.max(state.trimStart + .05, Math.min(max, Number(state.trimEnd ?? max) || max));
+  } else {
+    state.trimStart = 0;
+    state.trimEnd = 0;
+  }
+  elements.trimStartInput.max = String(max);
+  elements.trimEndInput.max = String(max);
+  elements.trimStartInput.value = track ? state.trimStart.toFixed(2) : '0';
+  elements.trimEndInput.value = track ? state.trimEnd.toFixed(2) : '0';
+  elements.trimStartInput.disabled = !track;
+  elements.trimEndInput.disabled = !track;
+  elements.trimDurationValue.textContent = track ? formatTime(state.trimEnd - state.trimStart) : '—';
+  elements.fadeInSlider.value = String(state.fadeIn);
+  elements.fadeOutSlider.value = String(state.fadeOut);
+  elements.fadeInValue.textContent = `${state.fadeIn.toFixed(1)} s`;
+  elements.fadeOutValue.textContent = `${state.fadeOut.toFixed(1)} s`;
+  elements.reverseToggle.checked = state.reverse;
+  [elements.fadeInSlider, elements.fadeOutSlider].forEach(updateSliderFill);
+}
+
+function restartPlaybackAfterToolChange() {
+  const track = getSelectedTrack();
+  if (!track) return;
+  const wasPlaying = state.isPlaying;
+  let position = wasPlaying ? getCurrentPosition() : state.pausedPosition;
+  if (wasPlaying) stopPlayback(false);
+  const bounds = getTrimBounds(track);
+  position = Math.max(bounds.start, Math.min(bounds.end, position));
+  if (state.reverse && position <= bounds.start + .01) position = bounds.end;
+  if (!state.reverse && position >= bounds.end - .01) position = bounds.start;
+  state.pausedPosition = position;
+  updateToolsControls();
+  elements.currentTime.textContent = formatTime(position);
+  elements.miniProgressFill.style.width = `${(position / track.duration) * 100}%`;
+  drawWaveform(track.buffer, position / track.duration);
+  if (wasPlaying) startPlayback(position);
+}
+
+function resetAdvancedEffects() {
+  Object.assign(state, { eqLow: 0, eqLowMid: 0, eqMid: 0, eqHighMid: 0, eqHigh: 0,
+    compressor: 0, stereoWidth: 100, saturation: 0, tape: 0, delay: 0, chorus: 0 });
+  elements.eqLowSlider.value = '0'; elements.eqLowMidSlider.value = '0'; elements.eqMidSlider.value = '0';
+  elements.eqHighMidSlider.value = '0'; elements.eqHighSlider.value = '0';
+  elements.compressorSlider.value = '0'; elements.stereoWidthSlider.value = '100';
+  elements.saturationSlider.value = '0'; elements.tapeSlider.value = '0';
+  elements.delaySlider.value = '0'; elements.chorusSlider.value = '0';
+  updateAdvancedLabels();
+  if (state.audioContext) applyAdvancedGraphSettings(state, state, state.audioContext);
+}
+
+function resetRemixTools() {
+  const track = getSelectedTrack();
+  const wasPlaying = state.isPlaying;
+  if (wasPlaying) stopPlayback(false);
+  state.trimStart = 0; state.trimEnd = track?.duration || 0;
+  state.fadeIn = 0; state.fadeOut = 0; state.reverse = false;
+  state.pausedPosition = 0;
+  updateToolsControls();
+  if (track) {
+    elements.currentTime.textContent = '0:00';
+    elements.miniProgressFill.style.width = '0%';
+    drawWaveform(track.buffer, 0);
+  }
+  if (wasPlaying) startPlayback(0);
+}
+
+function applyTrimInput(which) {
+  const track = getSelectedTrack();
+  if (!track) return;
+  const previousPosition = state.isPlaying ? getCurrentPosition() : state.pausedPosition;
+  const nextValue = Number(which === 'start' ? elements.trimStartInput.value : elements.trimEndInput.value);
+  if (!Number.isFinite(nextValue)) { updateToolsControls(); return; }
+  if (which === 'start') state.trimStart = Math.max(0, Math.min(track.duration - .05, nextValue));
+  else state.trimEnd = Math.max(.05, Math.min(track.duration, nextValue));
+  if (state.trimEnd <= state.trimStart + .05) {
+    if (which === 'start') state.trimStart = Math.max(0, state.trimEnd - .05);
+    else state.trimEnd = Math.min(track.duration, state.trimStart + .05);
+  }
+  state.pausedPosition = Math.max(state.trimStart, Math.min(state.trimEnd, previousPosition));
+  restartPlaybackAfterToolChange();
+}
+
 function wireEvents() {
+  elements.editorTabButtons.forEach((button) => button.addEventListener('click', () => switchEditorTab(button.dataset.editorTab)));
+  const advancedControls = [
+    [elements.eqLowSlider, 'eqLow'], [elements.eqLowMidSlider, 'eqLowMid'], [elements.eqMidSlider, 'eqMid'],
+    [elements.eqHighMidSlider, 'eqHighMid'], [elements.eqHighSlider, 'eqHigh'],
+    [elements.compressorSlider, 'compressor'], [elements.stereoWidthSlider, 'stereoWidth'],
+    [elements.saturationSlider, 'saturation'], [elements.tapeSlider, 'tape'],
+    [elements.delaySlider, 'delay'], [elements.chorusSlider, 'chorus'],
+  ];
+  advancedControls.forEach(([slider, key]) => slider.addEventListener('input', () => {
+    state[key] = Number(slider.value);
+    state.activePreset = null;
+    updatePresetSelection();
+    updateAdvancedLabels();
+    if (state.audioContext) applyAdvancedGraphSettings(state, state, state.audioContext);
+  }));
+  elements.eqResetButton.addEventListener('click', () => {
+    state.eqLow = 0; state.eqLowMid = 0; state.eqMid = 0; state.eqHighMid = 0; state.eqHigh = 0;
+    [elements.eqLowSlider, elements.eqLowMidSlider, elements.eqMidSlider, elements.eqHighMidSlider, elements.eqHighSlider].forEach((slider) => { slider.value = '0'; });
+    updateAdvancedLabels();
+    if (state.audioContext) applyAdvancedGraphSettings(state, state, state.audioContext);
+  });
+  elements.trimStartInput.addEventListener('change', () => applyTrimInput('start'));
+  elements.trimEndInput.addEventListener('change', () => applyTrimInput('end'));
+  elements.fadeInSlider.addEventListener('input', () => { state.fadeIn = Number(elements.fadeInSlider.value); updateToolsControls(); });
+  elements.fadeOutSlider.addEventListener('input', () => { state.fadeOut = Number(elements.fadeOutSlider.value); updateToolsControls(); });
+  elements.fadeInSlider.addEventListener('change', restartPlaybackAfterToolChange);
+  elements.fadeOutSlider.addEventListener('change', restartPlaybackAfterToolChange);
+  elements.reverseToggle.addEventListener('change', () => { state.reverse = elements.reverseToggle.checked; restartPlaybackAfterToolChange(); });
+  elements.resetToolsButton.addEventListener('click', resetRemixTools);
+
   const chooseFiles = () => elements.fileInput.click();
   elements.addFilesButton.addEventListener('click', chooseFiles);
   elements.addMoreButton.addEventListener('click', chooseFiles);
@@ -1437,11 +1876,16 @@ function wireEvents() {
   document.querySelectorAll('.preset-card[data-preset]').forEach((button) => {
     button.addEventListener('click', () => {
       const key = button.dataset.preset;
-      applySettings(PRESETS[key], true, key);
+      applySettings(PRESETS[key], false, key);
+      if (key === 'none') {
+        resetAdvancedEffects();
+        resetRemixTools();
+      }
+      setStatus('Настройки пресета применены.');
       showToast(`${button.querySelector('strong').textContent} — пресет применён.`);
     });
   });
-  $('resetButton').addEventListener('click', () => { applySettings(PRESETS.none, true, 'none'); showToast('Исходное звучание восстановлено.'); });
+  $('resetButton').addEventListener('click', () => { applySettings(PRESETS.none, false, 'none'); resetAdvancedEffects(); resetRemixTools(); setStatus('Все эффекты и монтаж сброшены.'); showToast('Исходное звучание восстановлено.'); });
   const controls = [
     [elements.speedSlider, 'speed'], [elements.pitchSlider, 'pitch'], [elements.reverbSlider, 'reverb'],
     [elements.bassSlider, 'bass'], [elements.volumeSlider, 'volume'],
@@ -1475,6 +1919,9 @@ function initialize() {
   updateMasterTarget(-14);
   renderMasterTrackList();
   updateExportFormatControls();
+  updateAdvancedLabels();
+  updateToolsControls();
+  switchEditorTab('sound');
   initializeViewFromLocation();
 }
 
