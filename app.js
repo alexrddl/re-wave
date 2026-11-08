@@ -650,17 +650,82 @@ async function encodeMp3(buffer, bitrate = 320, onProgress = null) {
   return new Blob(outputChunks, { type: 'audio/mpeg' });
 }
 
-function selectedFormat(selectElement) { return selectElement?.value === 'mp3' ? 'mp3' : 'wav'; }
+let flacEncoderPromise = null;
+
+async function ensureFlacEncoder() {
+  if (!flacEncoderPromise) {
+    flacEncoderPromise = import('https://esm.sh/@audio/encode-flac@1.4.3?bundle')
+      .then((module) => {
+        const factory = module.default || module.flac || module;
+        if (typeof factory !== 'function') throw new Error('FLAC-кодировщик загрузился в неизвестном формате.');
+        return factory;
+      })
+      .catch((error) => {
+        flacEncoderPromise = null;
+        throw new Error('Не удалось загрузить FLAC-кодировщик. Проверь подключение к интернету и попробуй ещё раз.');
+      });
+  }
+  return flacEncoderPromise;
+}
+
+async function encodeFlac(buffer, onProgress = null) {
+  const createEncoder = await ensureFlacEncoder();
+  const prepared = await prepareMp3Buffer(buffer);
+  const channels = prepared.numberOfChannels;
+  if (channels !== 1 && channels !== 2) throw new Error('FLAC экспорт поддерживает mono или stereo.');
+  const encoder = await createEncoder({
+    sampleRate: prepared.sampleRate,
+    channels,
+    bitDepth: 24,
+    compression: 5,
+    frames: prepared.length,
+  });
+  const sourceChannels = Array.from({ length: channels }, (_, index) => prepared.getChannelData(index));
+  const chunkSize = 16384;
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    for (let offset = 0; offset < prepared.length; offset += chunkSize) {
+      const end = Math.min(prepared.length, offset + chunkSize);
+      const pcmChannels = sourceChannels.map((channel) => channel.subarray(offset, end));
+      const encoded = await encoder.encode(pcmChannels);
+      if (encoded?.length) { chunks.push(new Uint8Array(encoded)); totalBytes += encoded.length; }
+      if (onProgress) {
+        onProgress(prepared.length ? Math.min(99, (end / prepared.length) * 100) : 99);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    }
+    const tail = await encoder.flush();
+    if (tail?.length) { chunks.push(new Uint8Array(tail)); totalBytes += tail.length; }
+    const finalHeader = typeof encoder.head === 'function' ? await encoder.head() : null;
+    if (!totalBytes) throw new Error('FLAC-кодировщик вернул пустой файл.');
+    const output = new Uint8Array(totalBytes);
+    let cursor = 0;
+    for (const chunk of chunks) { output.set(chunk, cursor); cursor += chunk.length; }
+    // libFLAC finalizes STREAMINFO only after flush; replace the provisional header.
+    if (finalHeader?.length) output.set(new Uint8Array(finalHeader).subarray(0, Math.min(finalHeader.length, output.length)), 0);
+    if (onProgress) onProgress(100);
+    if (output[0] !== 0x66 || output[1] !== 0x4c || output[2] !== 0x61 || output[3] !== 0x43) {
+      throw new Error('FLAC-кодировщик сформировал некорректный заголовок файла.');
+    }
+    return new Blob([output], { type: 'audio/flac' });
+  } finally {
+    if (typeof encoder.free === 'function') encoder.free();
+  }
+}
+
+function selectedFormat(selectElement) { return ['wav', 'mp3', 'flac'].includes(selectElement?.value) ? selectElement.value : 'wav'; }
 function selectedBitrate(selectElement) {
   const value = Number(selectElement?.value || 320);
   return [128, 192, 256, 320].includes(value) ? value : 320;
 }
 
 function updateExportFormatControls() {
-  const remixMp3 = selectedFormat(elements.exportFormat) === 'mp3';
-  elements.mp3BitrateWrap.hidden = !remixMp3;
-  elements.downloadButton.querySelector('span').textContent = 'Скачать ' + (remixMp3 ? 'MP3' : 'WAV');
-  elements.masterMp3BitrateWrap.hidden = selectedFormat(elements.masterExportFormat) !== 'mp3';
+  const remixFormat = selectedFormat(elements.exportFormat);
+  const masterFormat = selectedFormat(elements.masterExportFormat);
+  elements.mp3BitrateWrap.hidden = remixFormat !== 'mp3';
+  elements.downloadButton.querySelector('span').textContent = 'Скачать ' + remixFormat.toUpperCase();
+  elements.masterMp3BitrateWrap.hidden = masterFormat !== 'mp3';
 }
 function encodeWav(buffer, bitDepth = 16) {
   if (![16, 24].includes(bitDepth)) throw new Error('Поддерживается экспорт WAV 16-bit или 24-bit.');
@@ -765,10 +830,17 @@ async function exportTrack() {
     const rendered = await renderEffects(processed, state);
     const format = selectedFormat(elements.exportFormat);
     const bitrate = selectedBitrate(elements.mp3Bitrate);
-    setStatus(format === 'mp3' ? `Кодирую MP3 · ${bitrate} kbps…` : 'Создаю WAV-файл…');
-    const output = format === 'mp3'
-      ? await encodeMp3(rendered, bitrate, (percent) => setStatus(`Кодирую MP3… ${Math.round(percent)}%`))
-      : encodeWav(rendered);
+    let output;
+    if (format === 'mp3') {
+      setStatus(`Кодирую MP3 · ${bitrate} kbps…`);
+      output = await encodeMp3(rendered, bitrate, (percent) => setStatus(`Кодирую MP3… ${Math.round(percent)}%`));
+    } else if (format === 'flac') {
+      setStatus('Кодирую FLAC без потерь…');
+      output = await encodeFlac(rendered, (percent) => setStatus(`Кодирую FLAC… ${Math.round(percent)}%`));
+    } else {
+      setStatus('Создаю WAV-файл…');
+      output = encodeWav(rendered);
+    }
     const cleanBase = track.name.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_');
     downloadBlob(output, `${cleanBase}-rewave.${format}`);
     setStatus(`Готово! Обработанный ${format.toUpperCase()} скачан.`, 'success');
@@ -1173,6 +1245,10 @@ async function buildMasteredAudio(track, targetLufs, ceilingDb, format, bitrate,
     report(92, `Кодирую MP3 · ${bitrate} kbps…`);
     output = await encodeMp3(mastered, bitrate, (percent) =>
       report(92 + percent * 0.08, `Кодирую MP3… ${Math.round(percent)}%`));
+  } else if (format === 'flac') {
+    report(92, 'Кодирую FLAC без потерь…');
+    output = await encodeFlac(mastered, (percent) =>
+      report(92 + percent * 0.08, `Кодирую FLAC… ${Math.round(percent)}%`));
   } else {
     report(92, 'Создаю 24-bit WAV…');
     await new Promise((resolve) => setTimeout(resolve, 0));
