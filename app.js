@@ -411,7 +411,7 @@ function updateProgress() {
     } else {
       const endPosition = bounds.start;
       state.pausedPosition = endPosition;
-      stopPlayback(false);
+      // Let the source finish naturally; its onended handler keeps the reverb/delay tail alive.
       elements.currentTime.textContent = formatTime(endPosition);
       elements.miniProgressFill.style.width = `${(endPosition / track.duration) * 100}%`;
       drawWaveform(track.buffer, endPosition / track.duration);
