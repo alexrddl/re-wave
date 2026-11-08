@@ -1805,6 +1805,8 @@ function wireEvents() {
   ];
   advancedControls.forEach(([slider, key]) => slider.addEventListener('input', () => {
     state[key] = Number(slider.value);
+    state.activePreset = null;
+    updatePresetSelection();
     updateAdvancedLabels();
     if (state.audioContext) applyAdvancedGraphSettings(state, state, state.audioContext);
   }));
@@ -1864,7 +1866,12 @@ function wireEvents() {
   document.querySelectorAll('.preset-card[data-preset]').forEach((button) => {
     button.addEventListener('click', () => {
       const key = button.dataset.preset;
-      applySettings(PRESETS[key], true, key);
+      applySettings(PRESETS[key], false, key);
+      if (key === 'none') {
+        resetAdvancedEffects();
+        resetRemixTools();
+      }
+      setStatus('Настройки пресета применены.');
       showToast(`${button.querySelector('strong').textContent} — пресет применён.`);
     });
   });
