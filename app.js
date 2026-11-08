@@ -679,22 +679,46 @@ async function exportTrack() {
 
 
 function switchView(view) {
+  // Normalize the queue shortcut to the editor view, but keep its scroll behavior.
+  const requestedView = view;
   const showMastering = view === 'mastering';
-  const mobileView = showMastering ? 'mastering' : 'remix';
+  const activeView = showMastering ? 'mastering' : (view === 'queue' ? 'queue' : 'remix');
+
   elements.remixView.hidden = showMastering;
   elements.masteringView.hidden = !showMastering;
   elements.remixActions.hidden = showMastering;
   document.body.classList.toggle('mastering-active', showMastering);
+
   elements.pageEyebrow.textContent = showMastering ? 'ALBUM LOUDNESS WORKSPACE' : 'YOUR PERSONAL AUDIO LAB';
-  elements.pageTitle.innerHTML = showMastering ? 'Album mastering<span class="title-dot">.</span>' : 'Remix studio<span class="title-dot">.</span>';
+  elements.pageTitle.innerHTML = showMastering
+    ? 'Album mastering<span class="title-dot">.</span>'
+    : 'Remix studio<span class="title-dot">.</span>';
+
   document.querySelectorAll('[data-view]').forEach((link) => {
-    const isMobileLink = link.classList.contains('mobile-view-link');
-    const active = link.dataset.view === (isMobileLink ? mobileView : view);
+    const active = link.dataset.view === activeView ||
+      (activeView === 'queue' && link.dataset.view === 'queue');
     link.classList.toggle('active', active);
-    if (!isMobileLink && link.matches('a.nav-link')) link.setAttribute('aria-current', active ? 'page' : 'false');
+    if (link.matches('a.nav-link')) {
+      if (active) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    }
   });
-  if (showMastering) renderMasterStats();
-  if (view === 'queue') $('library').scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+
+  if (showMastering) {
+    renderMasterStats();
+    // Keep the URL in sync so the mastering view is directly linkable/refreshable.
+    if (location.hash !== '#mastering') history.replaceState(null, '', '#mastering');
+  } else if (requestedView === 'queue') {
+    if (location.hash !== '#library') history.replaceState(null, '', '#library');
+    $('library').scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  } else if (location.hash !== '#editor') {
+    history.replaceState(null, '', '#editor');
+  }
+}
+
+function initializeViewFromLocation() {
+  const initialHash = location.hash.toLowerCase();
+  switchView(initialHash === '#mastering' ? 'mastering' : initialHash === '#library' ? 'queue' : 'remix');
 }
 
 function setMasterControlsDisabled(disabled) {
@@ -1236,6 +1260,7 @@ function initialize() {
   wireMasteringEvents();
   updateMasterTarget(-14);
   renderMasterTrackList();
+  initializeViewFromLocation();
 }
 
 initialize();
