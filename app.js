@@ -274,8 +274,12 @@ function selectTrack(id) {
   state.selectedId = id;
   state.trimStart = 0;
   state.trimEnd = track.duration;
-  state.pausedPosition = state.reverse ? track.duration : 0;
+  state.fadeIn = 0;
+  state.fadeOut = 0;
+  state.reverse = false;
+  state.pausedPosition = 0;
   state.reversedBuffer = null;
+  resetAdvancedEffects();
   elements.currentTrackName.textContent = track.name;
   elements.currentTrackInfo.textContent = `${formatTime(track.duration)} · ${formatBytes(track.size)} · ${track.buffer.numberOfChannels} ch`;
   elements.playerTrackName.textContent = track.name;
@@ -307,6 +311,11 @@ function removeTrack(id) {
 
 function resetEditor() {
   state.selectedId = null;
+  state.trimStart = 0; state.trimEnd = 0;
+  state.fadeIn = 0; state.fadeOut = 0; state.reverse = false;
+  state.pausedPosition = 0; state.reversedBuffer = null;
+  resetAdvancedEffects();
+  updateToolsControls();
   elements.currentTrackName.textContent = 'Выбери свой первый трек';
   elements.currentTrackInfo.textContent = 'Твой следующий любимый звук начинается здесь';
   elements.playerTrackName.textContent = 'Ничего не играет';
@@ -400,11 +409,12 @@ function updateProgress() {
     if (state.isLooping) {
       startPlayback(restartPosition);
     } else {
-      state.pausedPosition = restartPosition;
+      const endPosition = bounds.start;
+      state.pausedPosition = endPosition;
       stopPlayback(false);
-      elements.currentTime.textContent = formatTime(restartPosition);
-      elements.miniProgressFill.style.width = `${(restartPosition / track.duration) * 100}%`;
-      drawWaveform(track.buffer, restartPosition / track.duration);
+      elements.currentTime.textContent = formatTime(endPosition);
+      elements.miniProgressFill.style.width = `${(endPosition / track.duration) * 100}%`;
+      drawWaveform(track.buffer, endPosition / track.duration);
     }
     return;
   }
@@ -727,7 +737,7 @@ async function startPlayback(position = state.pausedPosition) {
       state.reverse ? startPosition >= bounds.end - .01 : startPosition <= bounds.start + .01);
     source.onended = () => {
       if (state.source === source && state.isPlaying && !state.isLooping) {
-        state.pausedPosition = state.playbackReverse ? state.segmentEnd : state.segmentStart;
+        state.pausedPosition = state.segmentStart;
         state.isPlaying = false;
         state.source = null;
         state.stNode = null;
