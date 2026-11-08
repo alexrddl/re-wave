@@ -1661,6 +1661,111 @@ function wireMasteringEvents() {
   });
 }
 
+function switchEditorTab(tabName) {
+  elements.editorTabButtons.forEach((button) => {
+    const active = button.dataset.editorTab === tabName;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  elements.editorTabPanels.forEach((panel) => {
+    const active = panel.id === 'editorTab' + tabName[0].toUpperCase() + tabName.slice(1);
+    panel.hidden = !active;
+    panel.classList.toggle('active', active);
+  });
+}
+
+function updateAdvancedLabels() {
+  const items = [
+    ['eqLowValue', state.eqLow, ' dB'], ['eqLowMidValue', state.eqLowMid, ' dB'],
+    ['eqMidValue', state.eqMid, ' dB'], ['eqHighMidValue', state.eqHighMid, ' dB'], ['eqHighValue', state.eqHigh, ' dB'],
+  ];
+  items.forEach(([id, value, suffix]) => { $(id).textContent = `${value > 0 ? '+' : ''}${value}${suffix}`; });
+  elements.compressorValue.textContent = state.compressor ? `${state.compressor}%` : 'Off';
+  elements.stereoWidthValue.textContent = `${state.stereoWidth}%`;
+  elements.saturationValue.textContent = state.saturation ? `${state.saturation}%` : 'Off';
+  elements.tapeValue.textContent = state.tape ? `${state.tape}%` : 'Off';
+  elements.delayValue.textContent = state.delay ? `${state.delay}%` : 'Off';
+  elements.chorusValue.textContent = state.chorus ? `${state.chorus}%` : 'Off';
+  [elements.eqLowSlider, elements.eqLowMidSlider, elements.eqMidSlider, elements.eqHighMidSlider, elements.eqHighSlider,
+    elements.compressorSlider, elements.stereoWidthSlider, elements.saturationSlider, elements.tapeSlider, elements.delaySlider, elements.chorusSlider].forEach(updateSliderFill);
+}
+
+function updateToolsControls() {
+  const track = getSelectedTrack();
+  const duration = track?.duration || 0;
+  const max = Math.max(.1, duration);
+  state.trimStart = Math.max(0, Math.min(max - .05, Number(state.trimStart) || 0));
+  state.trimEnd = Math.max(state.trimStart + .05, Math.min(max, Number(state.trimEnd ?? max) || max));
+  elements.trimStartInput.max = String(max);
+  elements.trimEndInput.max = String(max);
+  elements.trimStartInput.value = state.trimStart.toFixed(1);
+  elements.trimEndInput.value = state.trimEnd.toFixed(1);
+  elements.trimStartInput.disabled = !track;
+  elements.trimEndInput.disabled = !track;
+  elements.trimDurationValue.textContent = track ? formatTime(state.trimEnd - state.trimStart) : '—';
+  elements.fadeInSlider.value = String(state.fadeIn);
+  elements.fadeOutSlider.value = String(state.fadeOut);
+  elements.fadeInValue.textContent = `${state.fadeIn.toFixed(1)} s`;
+  elements.fadeOutValue.textContent = `${state.fadeOut.toFixed(1)} s`;
+  elements.reverseToggle.checked = state.reverse;
+  [elements.fadeInSlider, elements.fadeOutSlider].forEach(updateSliderFill);
+}
+
+function restartPlaybackAfterToolChange() {
+  const track = getSelectedTrack();
+  if (!track) return;
+  const wasPlaying = state.isPlaying;
+  let position = wasPlaying ? getCurrentPosition() : state.pausedPosition;
+  if (wasPlaying) stopPlayback(false);
+  const bounds = getTrimBounds(track);
+  position = Math.max(bounds.start, Math.min(bounds.end, position));
+  if (state.reverse && position <= bounds.start + .01) position = bounds.end;
+  if (!state.reverse && position >= bounds.end - .01) position = bounds.start;
+  state.pausedPosition = position;
+  updateToolsControls();
+  elements.currentTime.textContent = formatTime(position);
+  elements.miniProgressFill.style.width = `${(position / track.duration) * 100}%`;
+  drawWaveform(track.buffer, position / track.duration);
+  if (wasPlaying) startPlayback(position);
+}
+
+function resetAdvancedEffects() {
+  Object.assign(state, { eqLow: 0, eqLowMid: 0, eqMid: 0, eqHighMid: 0, eqHigh: 0,
+    compressor: 0, stereoWidth: 100, saturation: 0, tape: 0, delay: 0, chorus: 0 });
+  elements.eqLowSlider.value = '0'; elements.eqLowMidSlider.value = '0'; elements.eqMidSlider.value = '0';
+  elements.eqHighMidSlider.value = '0'; elements.eqHighSlider.value = '0';
+  elements.compressorSlider.value = '0'; elements.stereoWidthSlider.value = '100';
+  elements.saturationSlider.value = '0'; elements.tapeSlider.value = '0';
+  elements.delaySlider.value = '0'; elements.chorusSlider.value = '0';
+  updateAdvancedLabels();
+  if (state.audioContext) applyAdvancedGraphSettings(state, state, state.audioContext);
+}
+
+function resetRemixTools() {
+  const track = getSelectedTrack();
+  state.trimStart = 0; state.trimEnd = track?.duration || 0;
+  state.fadeIn = 0; state.fadeOut = 0; state.reverse = false;
+  state.pausedPosition = 0; state.reversedBuffer = null;
+  updateToolsControls();
+  restartPlaybackAfterToolChange();
+}
+
+function applyTrimInput(which) {
+  const track = getSelectedTrack();
+  if (!track) return;
+  const previousPosition = state.isPlaying ? getCurrentPosition() : state.pausedPosition;
+  const nextValue = Number(which === 'start' ? elements.trimStartInput.value : elements.trimEndInput.value);
+  if (!Number.isFinite(nextValue)) { updateToolsControls(); return; }
+  if (which === 'start') state.trimStart = Math.max(0, Math.min(track.duration - .05, nextValue));
+  else state.trimEnd = Math.max(.05, Math.min(track.duration, nextValue));
+  if (state.trimEnd <= state.trimStart + .05) {
+    if (which === 'start') state.trimStart = Math.max(0, state.trimEnd - .05);
+    else state.trimEnd = Math.min(track.duration, state.trimStart + .05);
+  }
+  state.pausedPosition = Math.max(state.trimStart, Math.min(state.trimEnd, previousPosition));
+  restartPlaybackAfterToolChange();
+}
+
 function wireEvents() {
   const chooseFiles = () => elements.fileInput.click();
   elements.addFilesButton.addEventListener('click', chooseFiles);
